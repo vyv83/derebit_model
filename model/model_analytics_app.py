@@ -1,5 +1,5 @@
 import dash
-from dash import dcc, html, Input, Output, State, callback
+from dash import dcc, html, Input, Output, State, callback, ALL, MATCH
 import dash_bootstrap_components as dbc
 import dash_ag_grid as dag
 import pandas as pd
@@ -20,19 +20,30 @@ if BASE_DIR not in sys.path:
 from model_wrapper import OptionModel
 from daily_data_provider import DailyFeatureProvider
 from deribit_option_logic import generate_deribit_expirations, generate_deribit_strikes, get_birth_date, calculate_time_layers
+from option_timeseries_provider import OptionTimeseriesProvider
 
 # --- Black-Scholes Helper ---
 def black_scholes(S, K, T, r, sigma, option_type='call'):
     if T <= 0 or sigma <= 0:
-        return max(0, S - K) if option_type == 'call' else max(0, K - S)
+        price = max(0, S - K) if option_type == 'call' else max(0, K - S)
+        return price, 0.0
     
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
     
     if option_type == 'call':
-        return S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+        price = S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+        # Annualized Theta
+        theta = (- (S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) 
+                 - r * K * np.exp(-r * T) * norm.cdf(d2))
     else:
-        return K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        price = K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        # Annualized Theta
+        theta = (- (S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) 
+                 + r * K * np.exp(-r * T) * norm.cdf(-d2))
+    
+    # Return price and daily theta
+    return price, theta / 365.0
 
 # --- App Initialization ---
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
@@ -46,6 +57,10 @@ try:
     price_csv = os.path.join(BASE_DIR, 'btc_full_history.csv')
     vol_csv = os.path.join(BASE_DIR, 'btc_dvol_history.csv')
     provider = DailyFeatureProvider(price_file=price_csv, dvol_file=vol_csv)
+    
+    # Initialize timeseries provider for candlestick charts
+    timeseries_provider = OptionTimeseriesProvider()
+    
     print("CORE INITIALIZED SUCCESSFULLY")
 except Exception as e:
     print(f"FAILED TO INITIALIZE CORE: {e}")
@@ -53,6 +68,7 @@ except Exception as e:
     traceback.print_exc()
     model = None
     provider = None
+    timeseries_provider = None
 
 # --- Styling & Configuration ---
 CUSTOM_CSS = {
@@ -122,6 +138,7 @@ app.layout = html.Div([
     dcc.Store(id='prediction-results-store'),
     dcc.Store(id='timestamps-store', data=[]),
     dcc.Store(id='board-active-tab-store', data=None),
+    dcc.Store(id='selected-strike-store'),  # Stores strike selection: {strike, type, exp_date}
     
     dbc.Container([
         # 1. Header Row (Title + Selectors + KPIs)
@@ -206,13 +223,11 @@ app.layout = html.Div([
             dbc.Tab(label="Neural Smile", tab_id="tab-smile"),
             dbc.Tab(label="Options Board", tab_id="tab-board"),
             dbc.Tab(label="Vol Surface (3D)", tab_id="tab-surface"),
+            dbc.Tab(label="Strike Chart", tab_id="tab-strike"),
         ], id="main-tabs", active_tab="tab-smile", style={"marginBottom": "10px"}),
 
-        html.Div(id="tab-content"),
-        
-        # Spacer for dock
-        html.Div(style={"height": "120px"})
-    ], fluid=True, style={"maxWidth": "1800px"}),
+        html.Div(id="tab-content")
+    ], fluid=True, style={"maxWidth": "1800px", "paddingBottom": "100px"}),
     
     build_control_dock()
 ], style={"backgroundColor": CUSTOM_CSS["background"], "minHeight": "100vh", "fontFamily": "'Inter', sans-serif"})
@@ -441,10 +456,12 @@ def run_model_inference(market_state, selected_exp_values):
     [Input('main-tabs', 'active_tab'),
      Input('prediction-results-store', 'data'),
      Input('market-state-store', 'data'),
-     Input('dte-selector', 'value')],
-    [State('board-active-tab-store', 'data')]
+     Input('dte-selector', 'value'),
+     Input('selected-strike-store', 'data')],
+    [State('board-active-tab-store', 'data'),
+     State('timestamps-store', 'data')]
 )
-def render_content(active_tab, prediction_data, market_state, selected_dtes, last_board_tab):
+def render_content(active_tab, prediction_data, market_state, selected_dtes, selected_strike, last_board_tab, timestamps_store):
     if not prediction_data:
         return html.Div("Running Model Inference...")
         
@@ -531,11 +548,13 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, las
             font={"color": CUSTOM_CSS["text_primary"]},
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             margin=dict(t=50, b=50, l=50, r=20),
-            height=600,
             hovermode="x unified"
         )
         
-        return dcc.Graph(figure=fig)
+        
+        return html.Div([
+            dcc.Graph(figure=fig, style={"height": "calc(100vh - 300px)"})
+        ])
         
     elif active_tab == "tab-board":
         # Tabs for each DTE, named exactly like the selector buttons
@@ -564,8 +583,12 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, las
             puts = df_dte[df_dte['type'] == 'put'].copy()
             
             # Calc prices
-            calls['price'] = calls.apply(lambda r_row: black_scholes(spot, r_row['strike'], T, r, r_row['mark_iv']/100, 'call'), axis=1)
-            puts['price'] = puts.apply(lambda r_row: black_scholes(spot, r_row['strike'], T, r, r_row['mark_iv']/100, 'put'), axis=1)
+            # Calc prices and theta
+            res_c = calls.apply(lambda r_row: black_scholes(spot, r_row['strike'], T, r, r_row['mark_iv']/100, 'call'), axis=1)
+            calls['price'], calls['theta'] = zip(*res_c) if not res_c.empty else ([], [])
+            
+            res_p = puts.apply(lambda r_row: black_scholes(spot, r_row['strike'], T, r, r_row['mark_iv']/100, 'put'), axis=1)
+            puts['price'], puts['theta'] = zip(*res_p) if not res_p.empty else ([], [])
             
             calls.set_index('strike', inplace=True)
             puts.set_index('strike', inplace=True)
@@ -581,31 +604,34 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, las
             # Columns Config (matching main dashboard order)
             grid_cols = [
                 # Call side (right to left towards strike)
-                {'field': 'vega_c', 'headerName': 'Vega', 'width': 100, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}},
-                {'field': 'gamma_c', 'headerName': 'Gamma', 'width': 100, 'valueFormatter': {"function": "d3.format(',.6f')(params.value)"}},
-                {'field': 'delta_c', 'headerName': 'Delta', 'width': 100, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}, 'cellStyle': {'color': CUSTOM_CSS['accent_call'], 'fontWeight': 'bold'}},
-                {'field': 'mark_iv_c', 'headerName': 'IV', 'width': 100, 'valueFormatter': {"function": "d3.format(',.1f')(params.value)"}},
-                {'field': 'price_c', 'headerName': 'Price Call', 'width': 120, 'valueFormatter': {"function": "d3.format(',.3f')(params.value)"}, 'cellStyle': {'fontWeight': 'bold'}},
+                {'field': 'vega_c', 'headerName': 'Vega', 'width': 90, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}},
+                {'field': 'theta_c', 'headerName': 'Theta', 'width': 90, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}},
+                {'field': 'gamma_c', 'headerName': 'Gamma', 'width': 90, 'valueFormatter': {"function": "d3.format(',.6f')(params.value)"}},
+                {'field': 'delta_c', 'headerName': 'Delta', 'width': 90, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}, 'cellStyle': {'color': CUSTOM_CSS['accent_call'], 'fontWeight': 'bold'}},
+                {'field': 'mark_iv_c', 'headerName': 'IV', 'width': 80, 'valueFormatter': {"function": "d3.format(',.1f')(params.value)"}},
+                {'field': 'price_c', 'headerName': 'Price Call', 'width': 110, 'valueFormatter': {"function": "d3.format(',.3f')(params.value)"}, 'cellStyle': {'fontWeight': 'bold'}},
                 
                 # Middle Strike (bold center column)
-                {'field': 'strike_price', 'headerName': 'STRIKE', 'width': 140, 
+                {'field': 'strike_price', 'headerName': 'STRIKE', 'width': 120, 
                  'cellStyle': {'fontWeight': '800', 'textAlign': 'center', 'backgroundColor': '#F8F9F9', 'borderLeft': '2px solid #D5D8DC', 'borderRight': '2px solid #D5D8DC', 'fontSize': '16px'}},
                  
                 # Put side (left to right from strike)
-                {'field': 'price_p', 'headerName': 'Price Put', 'width': 120, 'valueFormatter': {"function": "d3.format(',.3f')(params.value)"}, 'cellStyle': {'fontWeight': 'bold'}},
-                {'field': 'mark_iv_p', 'headerName': 'IV', 'width': 100, 'valueFormatter': {"function": "d3.format(',.1f')(params.value)"}},
-                {'field': 'delta_p', 'headerName': 'Delta', 'width': 100, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}, 'cellStyle': {'color': CUSTOM_CSS['accent_put'], 'fontWeight': 'bold'}},
-                {'field': 'gamma_p', 'headerName': 'Gamma', 'width': 100, 'valueFormatter': {"function": "d3.format(',.6f')(params.value)"}},
-                {'field': 'vega_p', 'headerName': 'Vega', 'width': 100, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}},
+                {'field': 'price_p', 'headerName': 'Price Put', 'width': 110, 'valueFormatter': {"function": "d3.format(',.3f')(params.value)"}, 'cellStyle': {'fontWeight': 'bold'}},
+                {'field': 'mark_iv_p', 'headerName': 'IV', 'width': 80, 'valueFormatter': {"function": "d3.format(',.1f')(params.value)"}},
+                {'field': 'delta_p', 'headerName': 'Delta', 'width': 90, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}, 'cellStyle': {'color': CUSTOM_CSS['accent_put'], 'fontWeight': 'bold'}},
+                {'field': 'theta_p', 'headerName': 'Theta', 'width': 90, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}},
+                {'field': 'gamma_p', 'headerName': 'Gamma', 'width': 90, 'valueFormatter': {"function": "d3.format(',.6f')(params.value)"}},
+                {'field': 'vega_p', 'headerName': 'Vega', 'width': 90, 'valueFormatter': {"function": "d3.format(',.2f')(params.value)"}},
             ]
             
             grid = dag.AgGrid(
-                id=f"grid-{dte}",
+                id={'type': 'options-grid', 'date': date_str},  # Pattern matching ID
                 rowData=combined.to_dict('records'),
                 columnDefs=grid_cols,
                 defaultColDef={"sortable": True, "filter": True, "resizable": True},
                 dashGridOptions={
                     "rowHeight": 35,
+                    "rowSelection": "single",
                     "getRowStyle": {
                         "styleConditions": [
                             {
@@ -663,15 +689,352 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, las
                 zaxis_title='Implied Volatility'
             ),
             margin=dict(l=0, r=0, b=0, t=30),
-            height=600,
             uirevision='constant'  # Preserves camera view on data updates
         )
         
         return html.Div([
-            dcc.Graph(id='volatility-surface-3d', figure=fig_3d)
+            dcc.Graph(id='volatility-surface-3d', figure=fig_3d, style={"height": "calc(100vh - 300px)"})
+        ], style=style_card)
+    
+    elif active_tab == "tab-strike":
+        # Click Debug: Show selected strike data
+        if selected_strike and isinstance(selected_strike, dict):
+            strike = selected_strike.get('strike', 'N/A')
+            opt_type = selected_strike.get('type', 'N/A')
+            exp_date = selected_strike.get('exp_date', 'N/A')
+            debug_text = f"✅ Выбран: Strike {strike} | Тип: {opt_type.upper()} | Экспирация: {exp_date}"
+        else:
+            debug_text = "⚠️ Нет выбранного страйка. Перейдите на Options Board и кликните на любую ячейку (кроме STRIKE)."
+        
+        debug_info = html.Div([
+            html.H6("🖱️ Click Debug", style={"color": "#FF6B6B", "marginBottom": "10px"}),
+            html.P(debug_text, style={"fontSize": "12px", "margin": "0"})
+        ], style={**style_card, "marginBottom": "15px", "padding": "15px", "border": "2px solid #FF6B6B"})
+        
+        # Render candlestick chart for selected strike
+        if not market_state or not timeseries_provider:
+            return html.Div([
+                debug_info,
+                html.H5("Strike Chart", style={"color": CUSTOM_CSS["text_primary"]}),
+                html.P("System initializing...", 
+                       style={"color": CUSTOM_CSS["text_secondary"], "marginTop": "20px"})
+            ], style={**style_card, "padding": "40px", "textAlign": "center"})
+        
+        # Check if we have a strike selection
+        if not selected_strike or not isinstance(selected_strike, dict):
+            return html.Div([
+                debug_info,
+                html.H5("Strike Chart", style={"color": CUSTOM_CSS["text_primary"]}),
+                html.P("Click on any Call or Put price in the Options Board tab to view its candlestick chart.", 
+                       style={"color": CUSTOM_CSS["text_secondary"], "marginTop": "20px"}),
+                html.P("The chart will show:", style={"marginTop": "20px", "fontWeight": "bold"}),
+                html.Ul([
+                    html.Li("Option price evolution as candlesticks"),
+                    html.Li("Base asset (BTC/ETH) price overlay"),
+                    html.Li("Synchronized with time slider - updates as you move through time")
+                ], style={"color": CUSTOM_CSS["text_secondary"]})
+            ], style={**style_card, "padding": "40px", "textAlign": "center"})
+        
+        # Extract strike selection details
+        strike = selected_strike.get('strike')
+        option_type = selected_strike.get('type')
+        exp_date = selected_strike.get('exp_date')
+        currency = market_state.get('currency', 'BTC')
+        
+        if not all([strike, option_type, exp_date]):
+            return html.Div([
+                html.H5("Invalid Selection", style={"color": CUSTOM_CSS["text_primary"]}),
+                html.P("Please select a valid strike from the Options Board.", 
+                       style={"color": CUSTOM_CSS["text_secondary"]})
+            ], style={**style_card, "padding": "40px", "textAlign": "center"})
+        
+        # Generate OHLC data ON-THE-FLY using the model
+        current_time = market_state.get('target_ts')
+        if not current_time or not timestamps_store:
+            return html.Div("No time data available", style=style_card)
+        
+        current_dt = pd.to_datetime(current_time)
+        exp_dt = pd.to_datetime(exp_date)
+        
+        # Generate prices for all dates where option existed
+        prices_data = []
+        base_prices = []
+        
+        for date_str in timestamps_store:
+            date = pd.to_datetime(date_str)
+            
+            # Only generate for dates up to current slider position
+            if date > current_dt:
+                continue
+            
+            # Only generate for dates before expiration
+            if date > exp_dt:
+                continue
+            
+            # Calculate DTE
+            dte = (exp_dt - date).days
+            if dte <= 0:
+                continue
+            
+            # Get market state for this date
+            try:
+                state = provider.get_market_state(date)
+                if not state:
+                    continue
+                
+                spot = state['underlying_price']
+                
+                # Model predicts IV for this strike
+                result = model.predict(
+                    market_state=state,
+                    strikes=[strike],
+                    dte_days=dte,
+                    is_call=(option_type == 'call')
+                )
+                
+                # Get IV from model (model returns in %)
+                iv = result['mark_iv'].iloc[0] / 100.0
+                
+                # Calculate option price using Black-Scholes
+                T = dte / 365.0
+                r = 0.05
+                price, _ = black_scholes(spot, strike, T, r, iv, option_type)
+                
+                
+                # Store data (we'll compute open from previous close after the loop)
+                prices_data.append({
+                    'timestamp': date,
+                    'price': price  # Just store the price for now
+                })
+                
+                base_prices.append({
+                    'timestamp': date,
+                    'price': spot
+                })
+                
+            except Exception as e:
+                print(f"Error generating data for {date}: {e}")
+                continue
+        
+        # Convert to DataFrames
+        if not prices_data:
+            return html.Div([
+                debug_info,
+                html.H5(f"{currency} {strike} {option_type.upper()} - {exp_dt.strftime('%d %b %Y')}", 
+                        style={"color": CUSTOM_CSS["text_primary"]}),
+                html.P("Could not generate candlestick data for this option.", 
+                       style={"color": CUSTOM_CSS["text_secondary"], "marginTop": "20px"}),
+                html.P("This may occur if:", style={"marginTop": "20px"}),
+                html.Ul([
+                    html.Li("The option's lifetime is outside the available data period"),
+                    html.Li("The strike generates invalid model predictions"),
+                    html.Li("Data preprocessing is incomplete for this period")
+                ], style={"color": CUSTOM_CSS["text_secondary"]})
+            ], style={**style_card, "padding": "40px"})
+        
+        
+        # Process prices to compute open from previous close and high/low
+        ohlc_data = []
+        prev_price = None
+        for item in prices_data:
+            price = item['price']
+            open_price = prev_price if prev_price is not None else price
+            
+            # High and low from open and close
+            high_price = max(open_price, price)
+            low_price = min(open_price, price)
+            
+            ohlc_data.append({
+                'timestamp': item['timestamp'],
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': price
+            })
+            prev_price = price
+        
+        ohlc_df = pd.DataFrame(ohlc_data)
+        base_df = pd.DataFrame(base_prices)
+        
+        # Check if we have data
+        if ohlc_df.empty:
+            exp_dt = pd.to_datetime(exp_date)
+            dte = (exp_dt - current_dt).days
+            return html.Div([
+                debug_info,
+                html.H5(f"{currency} {strike} {option_type.upper()} - {exp_dt.strftime('%d %b %Y')} ({dte}d)", 
+                        style={"color": CUSTOM_CSS["text_primary"]}),
+                html.P("No historical data available for this strike.", 
+                       style={"color": CUSTOM_CSS["text_secondary"], "marginTop": "20px"}),
+                html.P("This may occur if:", style={"marginTop": "20px"}),
+                html.Ul([
+                    html.Li("The option was not listed during this time period"),
+                    html.Li("The strike is too far OTM with no liquidity"),
+                    html.Li("Data preprocessing is incomplete for this period")
+                ], style={"color": CUSTOM_CSS["text_secondary"]})
+            ], style={**style_card, "padding": "40px"})
+        
+        # Create the candlestick chart
+        fig = go.Figure()
+        
+        # Add candlestick trace (primary Y-axis)
+        fig.add_trace(go.Candlestick(
+            x=ohlc_df['timestamp'],
+            open=ohlc_df['open'],
+            high=ohlc_df['high'],
+            low=ohlc_df['low'],
+            close=ohlc_df['close'],
+            name=f"{option_type.upper()} Price",
+            increasing_line_color=CUSTOM_CSS["accent_call"],
+            decreasing_line_color=CUSTOM_CSS["accent_put"],
+            yaxis='y'
+        ))
+        
+        # Add base asset price overlay (secondary Y-axis)
+        if not base_df.empty:
+            fig.add_trace(go.Scatter(
+                x=base_df['timestamp'],
+                y=base_df['price'],
+                name=f"{currency} Spot",
+                line=dict(color='rgba(150, 150, 150, 0.6)', width=2, dash='dash'),
+                yaxis='y2'
+            ))
+        
+        # Calculate title details
+        exp_dt = pd.to_datetime(exp_date)
+        dte = (exp_dt - current_dt).days
+        type_color = CUSTOM_CSS["accent_call"] if option_type == 'call' else CUSTOM_CSS["accent_put"]
+        
+        # Layout with dual Y-axes
+        fig.update_layout(
+            title=dict(
+                text=f"{currency} ${strike:,.0f} {option_type.upper()} - Expires {exp_dt.strftime('%d %b %Y')} ({dte} days)",
+                font=dict(size=16, color=CUSTOM_CSS["text_primary"], weight=800)
+            ),
+            xaxis=dict(
+                title="Date",
+                gridcolor='rgba(200, 200, 200, 0.2)',
+                showgrid=True
+            ),
+            yaxis=dict(
+                title=dict(text=f"{option_type.capitalize()} Option Price ($)", font=dict(color=type_color)),
+                tickfont=dict(color=type_color),
+                side='left',
+                showgrid=True,
+                gridcolor='rgba(200, 200, 200, 0.2)'
+            ),
+            yaxis2=dict(
+                title=dict(text=f"{currency} Spot Price ($)", font=dict(color='gray')),
+                tickfont=dict(color='gray'),
+                overlaying='y',
+                side='right',
+                showgrid=False
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            margin=dict(t=60, b=50, l=70, r=70),
+            xaxis_rangeslider_visible=False  # Disable range slider for cleaner look
+        )
+        
+        # Current time marker: removed due to Plotly compatibility issues
+        
+        return html.Div([
+            dcc.Graph(figure=fig, config={'displayModeBar': True}, style={"height": "calc(100vh - 300px)"})
         ], style=style_card)
 
     return html.Div("Unknown Tab")
+
+# Catch clicks on grid cells
+@callback(
+    [Output('selected-strike-store', 'data', allow_duplicate=True),
+     Output('main-tabs', 'active_tab', allow_duplicate=True)],
+    Input({'type': 'options-grid', 'date': ALL}, 'cellClicked'),
+    [State('market-state-store', 'data'),
+     State({'type': 'options-grid', 'date': ALL}, 'rowData')],
+    prevent_initial_call=True
+)
+def handle_grid_click(cell_clicked_list, market_state, row_data_list):
+    """
+    Handles clicks on any grid cell from any expiration tab.
+    Extracts strike, expiration, and option type.
+    """
+    print(f"[GRID CLICK] Received {len(cell_clicked_list)} grids cell_clicked")
+    
+    if not cell_clicked_list or not market_state:
+        return dash.no_update, dash.no_update
+    
+    # Find which grid was clicked
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update, dash.no_update
+    
+    # Find the clicked grid
+    clicked_grid_idx = None
+    clicked_cell = None
+    
+    for i, cell_data in enumerate(cell_clicked_list):
+        if cell_data is not None:
+            clicked_grid_idx = i
+            clicked_cell = cell_data
+            break
+    
+    if clicked_cell is None:
+        return dash.no_update, dash.no_update
+    
+    # Extract data from clicked cell
+    col_id = clicked_cell.get('colId')
+    row_index = clicked_cell.get('rowIndex')
+    
+    # Ignore clicks on strike column
+    if col_id == 'strike_price':
+        print(f"[GRID CLICK] Ignoring click on strike column")
+        return dash.no_update, dash.no_update
+    
+    # Determine option type from column ID
+    # Columns ending with _c are Call, _p are Put
+    if col_id.endswith('_c'):
+        option_type = 'call'
+    elif col_id.endswith('_p'):
+        option_type = 'put'
+    else:
+        # Unknown column, ignore
+        print(f"[GRID CLICK] Ignoring click on unknown column {col_id}")
+        return dash.no_update, dash.no_update
+    
+    # Get expiration date from the triggered grid's ID
+    triggered_id = ctx.triggered[0]['prop_id']
+    # Parse: {"date":"2024-01-05","type":"options-grid"}.cellClicked
+    import json
+    id_part = triggered_id.split('.')[0]
+    grid_id = json.loads(id_part)
+    exp_date = grid_id.get('date')
+    
+    # Get strike price from row data
+    if row_data_list and clicked_grid_idx < len(row_data_list):
+        row_data = row_data_list[clicked_grid_idx]
+        if row_data and row_index < len(row_data):
+            row = row_data[row_index]
+            strike = row.get('strike_price')
+            
+            if strike and exp_date:
+                result = {
+                    'strike': strike,
+                    'type': option_type,
+                    'exp_date': exp_date
+                }
+                print(f"[GRID CLICK] Selected: {strike} {option_type.upper()} exp {exp_date}")
+                return result, 'tab-strike'
+    
+    print(f"[GRID CLICK] Failed to extract full data")
+    return dash.no_update, dash.no_update
 
 @callback(
     Output('board-active-tab-store', 'data'),
@@ -679,7 +1042,54 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, las
     prevent_initial_call=True
 )
 def store_board_tab(active_tab):
+    print(f"[BOARD TAB] Switched to: {active_tab}")
     return active_tab
+
+# Default strike for testing - automatically show a chart
+@callback(
+    Output('selected-strike-store', 'data'),
+    [Input('market-state-store', 'data'),
+     Input('main-tabs', 'active_tab')],
+    prevent_initial_call=False
+)
+def set_default_strike(market_state, active_tab):
+    """
+    Automatically set a default strike for testing the chart.
+    Uses current BTC price to find a realistic ATM strike.
+   """
+    if active_tab == 'tab-strike' and market_state:
+        print(f"[STRIKE SELECTION] Setting default test strike")
+        current_date = pd.to_datetime(market_state.get('target_ts'))
+        currency = market_state.get('currency', 'BTC')
+        
+        # Get current price from market state
+        current_price = market_state.get('index_price')
+        if not current_price:
+            print(f"[STRIKE SELECTION] No index price available")
+            return dash.no_update
+            
+        # Find nearest strike (round to nearest 500 for BTC, 50 for ETH)
+        step = 500 if currency == 'BTC' else 50
+        atm_strike = round(current_price / step) * step
+        
+        # Get first available expiration
+        exps = generate_deribit_expirations(current_date)
+        if not exps:
+            print(f"[STRIKE SELECTION] No expirations available")
+            return dash.no_update
+            
+        first_exp = exps[0][0]
+        exp_date_str = first_exp.strftime('%Y-%m-%d')
+        
+        default_strike = {
+            'strike': int(atm_strike),
+            'type': 'call',
+            'exp_date': exp_date_str
+        }
+        print(f"[STRIKE SELECTION] Default: {default_strike} (current {currency} price: {current_price})")
+        return default_strike
+    
+    return dash.no_update
 
 if __name__ == "__main__":
     app.run(debug=False, port=8051)
