@@ -238,6 +238,33 @@ def black_scholes_safe(S, K, T, r, sigma, option_type='call'):
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 app.title = "Neural Analytics Dashboard"
 
+# Custom CSS to reduce size
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            /* Reduce AG Grid header font size */
+            .ag-theme-alpine .ag-header-cell {
+                font-size: 11px !important;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+'''
+
 # Load Model and Provider
 try:
     model_path = os.path.join(BASE_DIR, 'best_multitask_svi.pth')
@@ -327,6 +354,7 @@ app.layout = html.Div([
     dcc.Store(id='prediction-results-store'),
     dcc.Store(id='timestamps-store', data=[]),
     dcc.Store(id='board-active-tab-store', data=None),
+    dcc.Store(id='previous-dte-selection-store', data=[]),  # Tracks previous DTE selection for auto-activation
     dcc.Store(id='selected-strike-store'),  # Stores strike selection: {strike, type, exp_date}
     
     dbc.Container([
@@ -409,10 +437,14 @@ app.layout = html.Div([
 
         # 3. Main Content Tabs
         dbc.Tabs([
-            dbc.Tab(label="Neural Smile", tab_id="tab-smile"),
-            dbc.Tab(label="Options Board", tab_id="tab-board"),
-            dbc.Tab(label="Vol Surface (3D)", tab_id="tab-surface"),
-            dbc.Tab(label="Strike Chart", tab_id="tab-strike"),
+            dbc.Tab(label="Neural Smile", tab_id="tab-smile", 
+                   label_style={"fontSize": "13px", "padding": "6px 12px", "fontWeight": "500"}),
+            dbc.Tab(label="Options Board", tab_id="tab-board",
+                   label_style={"fontSize": "13px", "padding": "6px 12px", "fontWeight": "500"}),
+            dbc.Tab(label="Vol Surface (3D)", tab_id="tab-surface",
+                   label_style={"fontSize": "13px", "padding": "6px 12px", "fontWeight": "500"}),
+            dbc.Tab(label="Strike Chart", tab_id="tab-strike",
+                   label_style={"fontSize": "13px", "padding": "6px 12px", "fontWeight": "500"}),
         ], id="main-tabs", active_tab="tab-smile", style={"marginBottom": "10px"}),
 
         html.Div(id="tab-content")
@@ -722,7 +754,7 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
             line_width=1, 
             line_color="rgba(180, 180, 180, 0.6)",
             line_dash="dash",
-            annotation_text="Current Price", 
+            annotation_text=f"${spot:,.0f}", 
             annotation_position="top left",
             annotation_font_size=10,
             annotation_font_color="gray"
@@ -850,6 +882,7 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 columnDefs=grid_cols,
                 defaultColDef={"sortable": True, "filter": True, "resizable": True},
                 dashGridOptions={
+                    "headerHeight": 28,  # Reduce header height
                     "rowHeight": 35,
                     "rowSelection": "single",
                     "getRowStyle": {
@@ -869,6 +902,7 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
             tabs.append(dbc.Tab(
                 label=tab_label,
                 tab_id=date_str, # Use constant date string for stickiness
+                label_style={"fontSize": "12px", "padding": "5px 10px", "fontWeight": "400"},
                 children=[html.Div(grid, style={"padding": "10px"})]
             ))
             
@@ -1130,6 +1164,60 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
         dte = (exp_dt - current_dt).days
         type_color = CUSTOM_CSS["accent_call"] if option_type == 'call' else CUSTOM_CSS["accent_put"]
         
+        # Get current prices for horizontal lines
+        current_option_price = ohlc_df.iloc[-1]['close'] if not ohlc_df.empty else None
+        current_spot_price = base_df.iloc[-1]['price'] if not base_df.empty else None
+        
+        # Add horizontal line for current option price (on primary Y-axis)
+        if current_option_price is not None:
+            # Add line using add_shape for better control
+            fig.add_shape(
+                type="line",
+                xref="paper", x0=0, x1=1,
+                yref="y", y0=current_option_price, y1=current_option_price,
+                line=dict(
+                    width=1.5,
+                    color=f"rgba({int(type_color[1:3], 16)}, {int(type_color[3:5], 16)}, {int(type_color[5:7], 16)}, 0.4)"
+                )
+            )
+            # Add annotation on the LEFT side
+            fig.add_annotation(
+                xref="paper", x=0,
+                yref="y", y=current_option_price,
+                text=f"${current_option_price:.2f}",
+                showarrow=False,
+                xanchor="left",
+                yanchor="bottom",
+                xshift=5,
+                yshift=3,
+                font=dict(size=9, color=type_color)
+            )
+        
+        # Add horizontal line for current spot price (on secondary Y-axis)
+        if current_spot_price is not None:
+            # Add line using add_shape for better control
+            fig.add_shape(
+                type="line",
+                xref="paper", x0=0, x1=1,
+                yref="y2", y0=current_spot_price, y1=current_spot_price,
+                line=dict(
+                    width=1.5,
+                    color="rgba(100, 100, 100, 0.35)"
+                )
+            )
+            # Add annotation on the RIGHT side
+            fig.add_annotation(
+                xref="paper", x=1,
+                yref="y2", y=current_spot_price,
+                text=f"${current_spot_price:,.2f}",
+                showarrow=False,
+                xanchor="right",
+                yanchor="bottom",
+                xshift=-5,
+                yshift=3,
+                font=dict(size=9, color="rgba(100, 100, 100, 0.8)")
+            )
+        
         # Layout with dual Y-axes
         fig.update_layout(
             title=dict(
@@ -1270,6 +1358,45 @@ def store_board_tab(active_tab):
     print(f"[BOARD TAB] Switched to: {active_tab}")
     return active_tab
 
+@callback(
+    [Output('board-active-tab-store', 'data', allow_duplicate=True),
+     Output('previous-dte-selection-store', 'data')],
+    Input('dte-selector', 'value'),
+    [State('board-active-tab-store', 'data'),
+     State('previous-dte-selection-store', 'data')],
+    prevent_initial_call=True
+)
+def auto_activate_board_subtab(selected_dtes, current_active, previous_dtes):
+    """
+    Автоматически активирует подвкладку Options Board при выборе новой экспирации.
+    Не переключает главную вкладку - только устанавливает активную подвкладку в фоне.
+    Активирует ПОСЛЕДНЮЮ ДОБАВЛЕННУЮ экспирацию, а не самую позднюю по дате.
+    """
+    if not selected_dtes:
+        return dash.no_update, []
+    
+    # Если текущая активная вкладка была удалена из списка, активируем первую
+    if current_active and current_active not in selected_dtes:
+        sorted_dtes = sorted(selected_dtes)
+        new_active = sorted_dtes[0]
+        print(f"[AUTO BOARD TAB] Current tab removed, switching to: {new_active}")
+        return new_active, selected_dtes
+    
+    # Определяем, какая экспирация была добавлена (сравниваем с предыдущим состоянием)
+    previous_set = set(previous_dtes) if previous_dtes else set()
+    current_set = set(selected_dtes)
+    newly_added = current_set - previous_set
+    
+    # Если добавлена новая экспирация, активируем её
+    if newly_added:
+        # Берем первую (и обычно единственную) добавленную экспирацию
+        new_active = list(newly_added)[0]
+        print(f"[AUTO BOARD TAB] Auto-activated newly added: {new_active}")
+        return new_active, selected_dtes
+    
+    # Если ничего не изменилось, сохраняем текущее состояние
+    return dash.no_update, selected_dtes
+
 # Default strike for testing - automatically show a chart
 @callback(
     Output('selected-strike-store', 'data'),
@@ -1293,10 +1420,6 @@ def set_default_strike(market_state, active_tab):
             print(f"[STRIKE SELECTION] No index price available")
             return dash.no_update
             
-        # Find nearest strike (round to nearest 500 for BTC, 50 for ETH)
-        step = 500 if currency == 'BTC' else 50
-        atm_strike = round(current_price / step) * step
-        
         # Get first available expiration
         exps = generate_deribit_expirations(current_date)
         if not exps:
@@ -1305,6 +1428,25 @@ def set_default_strike(market_state, active_tab):
             
         first_exp = exps[0][0]
         exp_date_str = first_exp.strftime('%Y-%m-%d')
+        
+        # Find ATM strike from real generated strikes (not hardcoded rounding)
+        # Get strikes from prediction data if available
+        if prediction_data:
+            df = pd.DataFrame(prediction_data)
+            # Filter for first expiration
+            dte_val = (first_exp - current_date).days
+            df_exp = df[df['dte'] == dte_val]
+            
+            if not df_exp.empty:
+                # Find nearest strike to current price
+                strikes = df_exp['strike'].unique()
+                atm_strike = min(strikes, key=lambda x: abs(x - current_price))
+            else:
+                # Fallback: use current price as strike
+                atm_strike = int(current_price)
+        else:
+            # Fallback: use current price as strike
+            atm_strike = int(current_price)
         
         default_strike = {
             'strike': int(atm_strike),
