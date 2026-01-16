@@ -310,6 +310,55 @@ style_card = {
 # Unified height for all main charts and grids to ensure they don't overlap with the time slider
 GLOBAL_CHART_STYLE = {"height": "calc(100vh - 280px)", "minHeight": "500px"}
 
+# Chart Theme Constants
+CHART_THEME = {
+    "title_size": 13,
+    "axis_label_size": 10,
+    "tick_size": 9,
+    "grid_color": "rgba(200, 200, 200, 0.15)",
+    "font_family": "'Inter', sans-serif"
+}
+
+def apply_chart_theme(fig, title_text):
+    """Universal approach for chart styling to ensure consistency across all tabs."""
+    fig.update_layout(
+        title=dict(
+            text=title_text,
+            font=dict(size=CHART_THEME["title_size"], color=CUSTOM_CSS["text_primary"], weight=800),
+            x=0.5, xanchor='center'
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(family=CHART_THEME["font_family"], color=CUSTOM_CSS["text_primary"]),
+        margin=dict(t=35, b=30, l=45, r=20), # Minimized margins to fill space, slightly increased right margin
+        hovermode='x unified',
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+            font=dict(size=CHART_THEME["tick_size"], family=CHART_THEME["font_family"])
+        ),
+        uirevision='constant',
+        modebar=dict(
+            orientation='v',
+            bgcolor='rgba(255, 255, 255, 0.0)', # Transparent background
+            color='rgba(0, 0, 0, 0.2)',
+            activecolor=CUSTOM_CSS["accent_iv"]
+        )
+    )
+    
+    # Standardize all existing X/Y axes in the figure
+    fig.update_xaxes(
+        gridcolor=CHART_THEME["grid_color"],
+        showgrid=True,
+        tickfont=dict(size=CHART_THEME["tick_size"], family=CHART_THEME["font_family"]),
+        title_font=dict(size=CHART_THEME["axis_label_size"], family=CHART_THEME["font_family"])
+    )
+    fig.update_yaxes(
+        gridcolor=CHART_THEME["grid_color"],
+        showgrid=True,
+        tickfont=dict(size=CHART_THEME["tick_size"], family=CHART_THEME["font_family"]),
+        title_font=dict(size=CHART_THEME["axis_label_size"], family=CHART_THEME["font_family"])
+    )
+
 style_kpi_label = {
     "fontSize": "11px",
     "color": CUSTOM_CSS["text_secondary"],
@@ -361,6 +410,7 @@ app.layout = html.Div([
     dcc.Store(id='board-active-tab-store', data=None),
     dcc.Store(id='previous-dte-selection-store', data=[]),  # Tracks previous DTE selection for auto-activation
     dcc.Store(id='selected-strike-store'),  # Stores strike selection: {strike, type, exp_date}
+    dcc.Store(id='iv-visibility-store', data=True), # Toggle for IV chart visibility
     
     dbc.Container([
         # 1. Header Row (Title + Selectors + KPIs)
@@ -451,8 +501,13 @@ app.layout = html.Div([
             dbc.Tab(label="Strike Chart", tab_id="tab-strike",
                    label_style={"fontSize": "13px", "padding": "6px 12px", "fontWeight": "500"}),
         ], id="main-tabs", active_tab="tab-smile", style={"marginBottom": "10px"}),
-
-        html.Div(id="tab-content")
+        
+        # Wrapped container for relative positioning of floating controls
+        html.Div([
+            # Persistent Toggle Container (Avoids recreation on search/time updates)
+            html.Div(id="iv-toggle-container", style={"position": "absolute", "top": "25px", "left": "35px", "zIndex": "100"}),
+            html.Div(id="tab-content")
+        ], style={"position": "relative"})
     ], fluid=True, style={"maxWidth": "1800px", "paddingBottom": "100px"}),
     
     build_control_dock()
@@ -683,11 +738,12 @@ def run_model_inference(market_state, selected_exp_values):
      Input('prediction-results-store', 'data'),
      Input('market-state-store', 'data'),
      Input('dte-selector', 'value'),
-     Input('selected-strike-store', 'data')],
+     Input('selected-strike-store', 'data'),
+     Input('iv-visibility-store', 'data')],
     [State('board-active-tab-store', 'data'),
      State('timestamps-store', 'data')]
 )
-def render_content(active_tab, prediction_data, market_state, selected_dtes, selected_strike, last_board_tab, timestamps_store):
+def render_content(active_tab, prediction_data, market_state, selected_dtes, selected_strike, iv_visible, last_board_tab, timestamps_store):
     if not prediction_data:
         return html.Div("Running Model Inference...")
         
@@ -940,15 +996,17 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
             )
         )])
         
+        apply_chart_theme(fig_3d, "Volatility Surface (3D)")
         fig_3d.update_layout(
-            title="Volatility Surface",
             scene=dict(
                 xaxis_title='Strike',
                 yaxis_title='Days to Expiry',
-                zaxis_title='Implied Volatility'
+                zaxis_title='IV (%)',
+                xaxis=dict(gridcolor=CHART_THEME["grid_color"]),
+                yaxis=dict(gridcolor=CHART_THEME["grid_color"]),
+                zaxis=dict(gridcolor=CHART_THEME["grid_color"])
             ),
-            margin=dict(l=0, r=0, b=0, t=30),
-            uirevision='constant'  # Preserves camera view on data updates
+            margin=dict(l=0, r=0, b=0, t=40) 
         )
         
         return html.Div([
@@ -1145,14 +1203,20 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
         iv_max = ohlc_df['iv'].max()
         iv_range = [iv_min - (iv_max - iv_min)*0.1, iv_max + (iv_max - iv_min)*0.1] if iv_max > iv_min else [iv_min - 2, iv_min + 2]
 
-        # Create subplots: Row 1 (Price) 75%, Row 2 (IV) 25%
-        fig = make_subplots(
-            rows=2, cols=1, 
-            shared_xaxes=True, 
-            vertical_spacing=0.04, 
-            row_heights=[0.72, 0.28],
-            specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
-        )
+        # Create subplots based on IV visibility
+        if iv_visible:
+            fig = make_subplots(
+                rows=2, cols=1, 
+                shared_xaxes=True, 
+                vertical_spacing=0.04, 
+                row_heights=[0.72, 0.28],
+                specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+            )
+        else:
+            fig = make_subplots(
+                rows=1, cols=1, 
+                specs=[[{"secondary_y": True}]]
+            )
         
         # Add candlestick trace (primary Y-axis, row 1)
         fig.add_trace(go.Candlestick(
@@ -1174,15 +1238,16 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 line=dict(color='rgba(150, 150, 150, 0.6)', width=2, dash='dash')
             ), row=1, col=1, secondary_y=True)
             
-        # Add IV trace (row 2)
-        fig.add_trace(go.Scatter(
-            x=ohlc_df['timestamp'],
-            y=ohlc_df['iv'],
-            name="Implied Volatility",
-            line=dict(color=CUSTOM_CSS["accent_iv"], width=2),
-            fill='tozeroy',
-            fillcolor='rgba(155, 89, 182, 0.1)'
-        ), row=2, col=1)
+        # Add IV trace (row 2) if visible
+        if iv_visible:
+            fig.add_trace(go.Scatter(
+                x=ohlc_df['timestamp'],
+                y=ohlc_df['iv'],
+                name="Implied Volatility",
+                line=dict(color=CUSTOM_CSS["accent_iv"], width=2),
+                fill='tozeroy',
+                fillcolor='rgba(155, 89, 182, 0.1)'
+            ), row=2, col=1)
         
         # Calculate title details
         exp_dt = pd.to_datetime(exp_date)
@@ -1247,69 +1312,32 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 borderpad=4
             )
         
-        # Layout
+        # ----------------------------------------------------------------------------
+        # FINALIZE LAYOUT (Using universal helper)
+        # ----------------------------------------------------------------------------
+        title_str = f"{currency} ${strike:,.0f} {option_type.upper()} - {exp_dt.strftime('%d %b %Y')} ({dte}d)"
+        apply_chart_theme(fig, title_str)
+        
+        # Specific overrides for multi-row chart
         fig.update_layout(
-            title=dict(
-                text=f"{currency} ${strike:,.0f} {option_type.upper()} - Expires {exp_dt.strftime('%d %b %Y')} ({dte} days)",
-                font=dict(size=16, color=CUSTOM_CSS["text_primary"], weight=800)
-            ),
-            xaxis=dict(
-                gridcolor='rgba(200, 200, 200, 0.2)',
-                showgrid=True,
-                showticklabels=False # Hide tick labels for Row 1
-            ),
-            xaxis2=dict(
-                title=None,
-                gridcolor='rgba(200, 200, 200, 0.2)',
-                showgrid=True,
-                tickfont=dict(size=8) # Уменьшен шрифт даты/времени
-            ),
-            yaxis=dict(
-                title=dict(text="Option Price ($)", font=dict(color=type_color, size=11)),
-                tickfont=dict(color=type_color, size=10),
-                side='left',
-                showgrid=True,
-                gridcolor='rgba(200, 200, 200, 0.1)'
-            ),
-            yaxis2=dict(
-                title=dict(text="Spot Price ($)", font=dict(color='gray', size=11)),
-                tickfont=dict(color='gray', size=10),
-                side='right',
-                showgrid=False
-            ),
-            yaxis3=dict(
-                title=dict(text="IV (%)", font=dict(color=CUSTOM_CSS["accent_iv"], size=11)),
-                tickfont=dict(color=CUSTOM_CSS["accent_iv"], size=10),
-                side='left',
-                showgrid=True,
-                gridcolor='rgba(200, 200, 200, 0.1)',
-                range=iv_range, # Явный диапазон для масштабирования
-                fixedrange=False
-            ),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            hovermode='x unified',
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            ),
-            margin=dict(t=60, b=45, l=90, r=90), # Balanced margins
             xaxis_rangeslider_visible=False,
-            autosize=True
+            xaxis=dict(showticklabels=not iv_visible),
+            yaxis=dict(title="Option Price ($)", color=type_color),
+            yaxis2=dict(title="Spot Price ($)", color='gray', showgrid=False)
         )
         
-        # Current time marker: removed due to Plotly compatibility issues
-        
-        return html.Div([
-            dcc.Graph(
-                figure=fig, 
-                config={'displayModeBar': True, 'responsive': True},
-                style=GLOBAL_CHART_STYLE
+        if iv_visible:
+            fig.update_layout(
+                yaxis3=dict(
+                    title="IV (%)", color=CUSTOM_CSS["accent_iv"],
+                    range=iv_range, fixedrange=False,
+                    gridcolor=CHART_THEME["grid_color"]
+                )
             )
-        ], style={**style_card, "paddingBottom": "10px"})
+
+        return html.Div([
+            dcc.Graph(figure=fig, config={'displayModeBar': True, 'responsive': True}, style=GLOBAL_CHART_STYLE)
+        ], style={**style_card, "paddingBottom": "10px", "position": "relative"})
 
     return html.Div("Unknown Tab")
 
@@ -1444,6 +1472,50 @@ def auto_activate_board_subtab(selected_dtes, current_active, previous_dtes):
     
     # Если ничего не изменилось, сохраняем текущее состояние
     return dash.no_update, selected_dtes
+
+# Handle IV Chart Toggle Logic & Appearance
+@callback(
+    [Output("iv-toggle-container", "children"),
+     Output("iv-toggle-container", "style")],
+    [Input("main-tabs", "active_tab"),
+     Input("iv-visibility-store", "data"),
+     Input("selected-strike-store", "data")]
+)
+def manage_iv_toggle_view(active_tab, iv_visible, selected_strike):
+    """
+    Manages the existence and visibility of the IV toggle button.
+    Moving this out of the main chart render prevents state reset on time shift.
+    """
+    if active_tab != "tab-strike":
+        return None, {"display": "none"}
+        
+    # Check if a strike is selected - hide button if no chart is shown
+    if not selected_strike or not isinstance(selected_strike, dict) or not selected_strike.get('strike'):
+        return None, {"display": "none"}
+    
+    btn = dbc.Button(
+        [html.Span("VOL ", style={"fontSize": "9px", "opacity": "0.7"}), 
+         html.Span("ON" if iv_visible else "OFF", style={"fontWeight": "800"})],
+        id="btn-toggle-iv", size="sm", color="light",
+        style={
+            "padding": "1px 10px", "height": "24px", "borderRadius": "4px", "fontSize": "10px",
+            "border": f"1px solid {CUSTOM_CSS['accent_iv'] if iv_visible else '#ced4da'}",
+            "color": CUSTOM_CSS['accent_iv'] if iv_visible else '#7F8C8D',
+            "backgroundColor": "rgba(255,255,255,0.8)", "boxShadow": "0 2px 4px rgba(0,0,0,0.05)"
+        }
+    )
+    return btn, {"position": "absolute", "top": "25px", "left": "35px", "zIndex": "100", "display": "block"}
+
+@callback(
+    Output('iv-visibility-store', 'data'),
+    Input('btn-toggle-iv', 'n_clicks'),
+    State('iv-visibility-store', 'data'),
+    prevent_initial_call=True
+)
+def toggle_iv_visibility(n_clicks, current_state):
+    if n_clicks is None:
+        return dash.no_update
+    return not current_state
 
 # Default strike for testing - automatically show a chart
 @callback(
