@@ -319,6 +319,26 @@ CHART_THEME = {
     "font_family": "'Inter', sans-serif"
 }
 
+# Universal Subplot Configuration
+SUBPLOT_CONFIG = {
+    'iv': {
+        'label': 'VOL', 
+        'title': 'IV (%)', 
+        'color': CUSTOM_CSS["accent_iv"], 
+        'data_col': 'iv', 
+        'format': '.1f',
+        'is_percent': True
+    },
+    'theta': {
+        'label': 'THETA', 
+        'title': 'Theta ($)', 
+        'color': '#E67E22', 
+        'data_col': 'theta', 
+        'format': '.2f',
+        'is_percent': False
+    }
+}
+
 def apply_chart_theme(fig, title_text):
     """Universal approach for chart styling to ensure consistency across all tabs."""
     fig.update_layout(
@@ -504,8 +524,42 @@ app.layout = html.Div([
         
         # Wrapped container for relative positioning of floating controls
         html.Div([
-            # Persistent Toggle Container (Avoids recreation on search/time updates)
-            html.Div(id="iv-toggle-container", style={"position": "absolute", "top": "25px", "left": "35px", "zIndex": "100"}),
+            # Persistent Toggle Container (Checklist version)
+            # Persistent Toggle Container (Custom Buttons + Robust State)
+            html.Div([
+                # Hidden Store for Robust Logic
+                dcc.Store(id="chart-sublots-selector", data=['theta']), # Default: Theta ON in list form
+                
+                # Visual Buttons Container
+                html.Div([
+                    dbc.Button(
+                        [html.Span("VOL ", style={"fontSize": "9px", "opacity": "0.7"}), 
+                         html.Span("OFF", id="btn-iv-label", style={"fontWeight": "800"})],
+                        id="btn-toggle-iv",
+                        size="sm", color="light",
+                        style={
+                            "padding": "1px 10px", "height": "24px", "borderRadius": "4px", "fontSize": "10px",
+                            "border": "1px solid #ced4da",
+                            "color": "#7F8C8D",
+                            "backgroundColor": "rgba(255,255,255,0.8)", "boxShadow": "0 2px 4px rgba(0,0,0,0.05)",
+                            "marginRight": "5px"
+                        }
+                    ),
+                    dbc.Button(
+                        [html.Span("THETA ", style={"fontSize": "9px", "opacity": "0.7"}), 
+                         html.Span("ON", id="btn-theta-label", style={"fontWeight": "800"})],
+                        id="btn-toggle-theta",
+                        size="sm", color="light",
+                        style={
+                            "padding": "1px 10px", "height": "24px", "borderRadius": "4px", "fontSize": "10px",
+                            "border": "1px solid #E67E22", # Active Color
+                            "color": "#E67E22",           # Active Color
+                            "backgroundColor": "rgba(255,255,255,0.8)", "boxShadow": "0 2px 4px rgba(0,0,0,0.05)"
+                        } 
+                    ),
+                ], style={"display": "flex"})
+            ], id="chart-controls-container", style={"position": "absolute", "top": "25px", "left": "35px", "zIndex": "100", "display": "none"}),
+            
             html.Div(id="tab-content")
         ], style={"position": "relative"})
     ], fluid=True, style={"maxWidth": "1800px", "paddingBottom": "100px"}),
@@ -739,11 +793,11 @@ def run_model_inference(market_state, selected_exp_values):
      Input('market-state-store', 'data'),
      Input('dte-selector', 'value'),
      Input('selected-strike-store', 'data'),
-     Input('iv-visibility-store', 'data')],
+     Input('chart-sublots-selector', 'data')],
     [State('board-active-tab-store', 'data'),
      State('timestamps-store', 'data')]
 )
-def render_content(active_tab, prediction_data, market_state, selected_dtes, selected_strike, iv_visible, last_board_tab, timestamps_store):
+def render_content(active_tab, prediction_data, market_state, selected_dtes, selected_strike, visible_charts, last_board_tab, timestamps_store):
     if not prediction_data:
         return html.Div("Running Model Inference...")
         
@@ -1127,7 +1181,8 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 prices_data.append({
                     'timestamp': date,
                     'price': greeks['price'],  # Используем price из BS
-                    'iv': iv * 100.0           # Сохраняем IV в %
+                    'iv': iv * 100.0,          # Сохраняем IV в %
+                    'theta': greeks['theta']   # Сохраняем Theta (daily)
                 })
                 
                 base_prices.append({
@@ -1173,7 +1228,10 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 'high': high_price,
                 'low': low_price,
                 'close': price,
-                'iv': item.get('iv', 0)
+                'low': low_price,
+                'close': price,
+                'iv': item.get('iv', 0),
+                'theta': item.get('theta', 0)
             })
             prev_price = price
         
@@ -1203,20 +1261,57 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
         iv_max = ohlc_df['iv'].max()
         iv_range = [iv_min - (iv_max - iv_min)*0.1, iv_max + (iv_max - iv_min)*0.1] if iv_max > iv_min else [iv_min - 2, iv_min + 2]
 
-        # Create subplots based on IV visibility
-        if iv_visible:
-            fig = make_subplots(
-                rows=2, cols=1, 
-                shared_xaxes=True, 
-                vertical_spacing=0.04, 
-                row_heights=[0.72, 0.28],
-                specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
-            )
+        # Calculate Theta range for better scaling
+        theta_min = ohlc_df['theta'].min()
+        theta_max = ohlc_df['theta'].max()
+        # Ensure a small buffer even if flat
+        if theta_max > theta_min:
+             buffer = (theta_max - theta_min) * 0.1
+             theta_range = [theta_min - buffer, theta_max + buffer]
         else:
-            fig = make_subplots(
-                rows=1, cols=1, 
-                specs=[[{"secondary_y": True}]]
-            )
+             # If flat (0 or constant), add small range around value
+             val = theta_min
+             theta_range = [val - abs(val)*0.2 - 0.01, val + abs(val)*0.2 + 0.01]
+
+        # Determine enabled subplots
+        active_subplots = []
+        if isinstance(visible_charts, list):
+             # Filter to ensure only valid keys and maintain order from config
+             for key in SUBPLOT_CONFIG.keys():
+                 if key in visible_charts:
+                     active_subplots.append(key)
+        elif visible_charts is None:
+             # Default fallback only if None (initial load)
+             active_subplots = ['theta']
+        # If it's an empty list (user deselected all), it stays empty
+
+        # Dynamic Row Height Calculation
+        num_subplots = len(active_subplots)
+        
+        if num_subplots == 0:
+            row_heights = [1.0]
+            specs = [[{"secondary_y": True}]]
+            vertical_spacing = 0.0
+        elif num_subplots == 1:
+            row_heights = [0.72, 0.28]
+            specs = [[{"secondary_y": True}], [{"secondary_y": False}]]
+            vertical_spacing = 0.04
+        else: 
+            # 2+ subplots: Price ~55%, rest split equally
+            price_h = 0.55
+            sub_h = (1.0 - price_h) / num_subplots
+            row_heights = [price_h] + [sub_h] * num_subplots
+            specs = [[{"secondary_y": True}]] + [[{"secondary_y": False}]] * num_subplots
+            vertical_spacing = 0.03
+
+        fig = make_subplots(
+            rows=1 + num_subplots, 
+            cols=1, 
+            shared_xaxes=True, 
+            vertical_spacing=vertical_spacing, 
+            row_heights=row_heights,
+            specs=specs
+        )
         
         # Add candlestick trace (primary Y-axis, row 1)
         fig.add_trace(go.Candlestick(
@@ -1238,16 +1333,21 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 line=dict(color='rgba(150, 150, 150, 0.6)', width=2, dash='dash')
             ), row=1, col=1, secondary_y=True)
             
-        # Add IV trace (row 2) if visible
-        if iv_visible:
+        # Add Subplot Traces
+        for i, metric_key in enumerate(active_subplots):
+            # Row index is i + 2 (because Price is Row 1)
+            row_idx = i + 2
+            config = SUBPLOT_CONFIG[metric_key]
+            
             fig.add_trace(go.Scatter(
                 x=ohlc_df['timestamp'],
-                y=ohlc_df['iv'],
-                name="Implied Volatility",
-                line=dict(color=CUSTOM_CSS["accent_iv"], width=2),
-                fill='tozeroy',
-                fillcolor='rgba(155, 89, 182, 0.1)'
-            ), row=2, col=1)
+                y=ohlc_df[config['data_col']],
+                name=config['title'],
+                line=dict(color=config['color'], width=2),
+                fill='tozeroy', # Apply fill to all subplots (IV and Theta)
+                # Dynamic fill color based on metric
+                fillcolor='rgba(155, 89, 182, 0.1)' if metric_key == 'iv' else 'rgba(230, 126, 34, 0.1)'
+            ), row=row_idx, col=1)
         
         # Calculate title details
         exp_dt = pd.to_datetime(exp_date)
@@ -1318,26 +1418,45 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
         title_str = f"{currency} ${strike:,.0f} {option_type.upper()} - {exp_dt.strftime('%d %b %Y')} ({dte}d)"
         apply_chart_theme(fig, title_str)
         
-        # Specific overrides for multi-row chart
+        # Specific overrides
         fig.update_layout(
+            margin=dict(l=0, r=0, t=35, b=0), # Maximize width
             xaxis_rangeslider_visible=False,
-            xaxis=dict(showticklabels=not iv_visible),
+            # Hide tick labels on Main Chart only if there are subplots below it
+            xaxis=dict(showticklabels=(num_subplots == 0)), 
             yaxis=dict(title="Option Price ($)", color=type_color),
             yaxis2=dict(title="Spot Price ($)", color='gray', showgrid=False)
         )
         
-        if iv_visible:
-            fig.update_layout(
-                yaxis3=dict(
-                    title="IV (%)", color=CUSTOM_CSS["accent_iv"],
-                    range=iv_range, fixedrange=False,
-                    gridcolor=CHART_THEME["grid_color"]
+        # Configure axes for dynamic subplots
+        for i, metric_key in enumerate(active_subplots):
+            config = SUBPLOT_CONFIG[metric_key]
+            
+            # Identify specific axis keys
+            # make_subplots logic: row 2 -> yaxis3 (yaxis2 is secondary on row 1)
+            # row 3 -> yaxis4, etc.
+            y_axis_key = f"yaxis{i + 3}"
+            
+            axis_update = {
+                y_axis_key: dict(
+                    title=dict(text=config['title'], font=dict(color=config['color'], size=CHART_THEME["axis_label_size"])),
+                    tickfont=dict(color=config['color'], size=CHART_THEME["tick_size"]),
+                    side='left', showgrid=True, gridcolor=CHART_THEME["grid_color"],
+                    fixedrange=False
                 )
-            )
+            }
+            
+            if metric_key == 'iv' and 'iv_range' in locals():
+                 axis_update[y_axis_key]['range'] = iv_range
+            
+            if metric_key == 'theta' and 'theta_range' in locals():
+                 axis_update[y_axis_key]['range'] = theta_range
 
+            fig.update_layout(**axis_update)
+            
         return html.Div([
-            dcc.Graph(figure=fig, config={'displayModeBar': True, 'responsive': True}, style=GLOBAL_CHART_STYLE)
-        ], style={**style_card, "paddingBottom": "10px", "position": "relative"})
+            dcc.Graph(figure=fig, config={'displayModeBar': False, 'responsive': True}, style=GLOBAL_CHART_STYLE)
+        ], style={**style_card, "padding": "10px 0px", "position": "relative"})
 
     return html.Div("Unknown Tab")
 
@@ -1473,49 +1592,91 @@ def auto_activate_board_subtab(selected_dtes, current_active, previous_dtes):
     # Если ничего не изменилось, сохраняем текущее состояние
     return dash.no_update, selected_dtes
 
-# Handle IV Chart Toggle Logic & Appearance
+# Handle Chart Controls Visibility
 @callback(
-    [Output("iv-toggle-container", "children"),
-     Output("iv-toggle-container", "style")],
+    Output("chart-controls-container", "style"),
     [Input("main-tabs", "active_tab"),
-     Input("iv-visibility-store", "data"),
      Input("selected-strike-store", "data")]
 )
-def manage_iv_toggle_view(active_tab, iv_visible, selected_strike):
+def update_controls_visibility(active_tab, selected_strike):
     """
-    Manages the existence and visibility of the IV toggle button.
-    Moving this out of the main chart render prevents state reset on time shift.
+    Show chart controls only on Strike Chart tab when a strike is selected.
     """
-    if active_tab != "tab-strike":
-        return None, {"display": "none"}
-        
-    # Check if a strike is selected - hide button if no chart is shown
-    if not selected_strike or not isinstance(selected_strike, dict) or not selected_strike.get('strike'):
-        return None, {"display": "none"}
-    
-    btn = dbc.Button(
-        [html.Span("VOL ", style={"fontSize": "9px", "opacity": "0.7"}), 
-         html.Span("ON" if iv_visible else "OFF", style={"fontWeight": "800"})],
-        id="btn-toggle-iv", size="sm", color="light",
-        style={
-            "padding": "1px 10px", "height": "24px", "borderRadius": "4px", "fontSize": "10px",
-            "border": f"1px solid {CUSTOM_CSS['accent_iv'] if iv_visible else '#ced4da'}",
-            "color": CUSTOM_CSS['accent_iv'] if iv_visible else '#7F8C8D',
-            "backgroundColor": "rgba(255,255,255,0.8)", "boxShadow": "0 2px 4px rgba(0,0,0,0.05)"
-        }
-    )
-    return btn, {"position": "absolute", "top": "25px", "left": "35px", "zIndex": "100", "display": "block"}
+    if active_tab == "tab-strike" and selected_strike:
+        return {"position": "absolute", "top": "25px", "left": "35px", "zIndex": "100", "display": "block"}
+    return {"display": "none"}
 
+# Sync Buttons -> Store (Logic)
 @callback(
-    Output('iv-visibility-store', 'data'),
-    Input('btn-toggle-iv', 'n_clicks'),
-    State('iv-visibility-store', 'data'),
-    prevent_initial_call=True
+    Output("chart-sublots-selector", "data"),
+    [Input("btn-toggle-iv", "n_clicks"),
+     Input("btn-toggle-theta", "n_clicks")],
+    [State("chart-sublots-selector", "data")]
 )
-def toggle_iv_visibility(n_clicks, current_state):
-    if n_clicks is None:
+def update_chart_state(n_iv, n_theta, current_list):
+    ctx = dash.callback_context
+    if not ctx.triggered:
         return dash.no_update
-    return not current_state
+        
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    # Initialize if empty/None
+    if not isinstance(current_list, list):
+        current_list = ['theta']
+        
+    new_list = current_list.copy()
+    
+    target_key = None
+    if trigger_id == "btn-toggle-iv":
+        target_key = 'iv'
+    elif trigger_id == "btn-toggle-theta":
+        target_key = 'theta'
+        
+    if target_key:
+        if target_key in new_list:
+            new_list.remove(target_key)
+        else:
+            new_list.append(target_key)
+            
+    return new_list
+
+# Sync Store -> Buttons (Visuals)
+@callback(
+    [Output("btn-toggle-iv", "style"),
+     Output("btn-toggle-iv", "children"),
+     Output("btn-toggle-theta", "style"),
+     Output("btn-toggle-theta", "children")],
+    [Input("chart-sublots-selector", "data")]
+)
+def update_button_visuals(active_list):
+    if not isinstance(active_list, list):
+        active_list = ['theta'] # Default
+        
+    # Helper to generate style
+    def get_style_and_label(key, active_keys):
+        config = SUBPLOT_CONFIG[key]
+        is_active = key in active_keys
+        
+        style = {
+            "padding": "1px 10px", "height": "24px", "borderRadius": "4px", "fontSize": "10px",
+            "border": f"1px solid {config['color'] if is_active else '#ced4da'}",
+            "color": config['color'] if is_active else '#7F8C8D',
+            "backgroundColor": "rgba(255,255,255,0.8)", 
+            "boxShadow": "0 2px 4px rgba(0,0,0,0.05)",
+            "marginRight": "5px" if key == 'iv' else "0px" # Visual spacing
+        }
+        
+        label = [
+            html.Span(f"{config['label']} ", style={"fontSize": "9px", "opacity": "0.7"}), 
+            html.Span("ON" if is_active else "OFF", style={"fontWeight": "800"})
+        ]
+        
+        return style, label
+
+    iv_style, iv_label = get_style_and_label('iv', active_list)
+    theta_style, theta_label = get_style_and_label('theta', active_list)
+    
+    return iv_style, iv_label, theta_style, theta_label
 
 # Default strike for testing - automatically show a chart
 @callback(
