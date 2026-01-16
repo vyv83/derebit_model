@@ -1420,7 +1420,7 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
         
         # Specific overrides
         fig.update_layout(
-            margin=dict(l=0, r=0, t=35, b=0), # Maximize width
+            margin=dict(l=5, r=0, t=35, b=0), # Maximize width
             xaxis_rangeslider_visible=False,
             # Hide tick labels on Main Chart only if there are subplots below it
             xaxis=dict(showticklabels=(num_subplots == 0)), 
