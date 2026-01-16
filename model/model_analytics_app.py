@@ -42,6 +42,7 @@ import dash_ag_grid as dag
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 import numpy as np
 import os
 import glob
@@ -294,6 +295,7 @@ CUSTOM_CSS = {
     "text_secondary": "#7F8C8D",
     "accent_call": "#76D7C4",
     "accent_put": "#FF8787",
+    "accent_iv": "#9B59B6",
 }
 
 style_card = {
@@ -304,6 +306,9 @@ style_card = {
     "padding": "12px 20px",
     "marginBottom": "10px"
 }
+
+# Unified height for all main charts and grids to ensure they don't overlap with the time slider
+GLOBAL_CHART_STYLE = {"height": "calc(100vh - 280px)", "minHeight": "500px"}
 
 style_kpi_label = {
     "fontSize": "11px",
@@ -774,8 +779,8 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
         
         
         return html.Div([
-            dcc.Graph(figure=fig, style={"height": "calc(100vh - 300px)"})
-        ])
+            dcc.Graph(figure=fig, style=GLOBAL_CHART_STYLE)
+        ], style=style_card)
         
     elif active_tab == "tab-board":
         # Tabs for each DTE, named exactly like the selector buttons
@@ -894,7 +899,7 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                         ]
                     }
                 },
-                style={"height": "650px", "width": "100%"},
+                style={**GLOBAL_CHART_STYLE, "width": "100%"},
                 className="ag-theme-alpine"
             )
             
@@ -947,7 +952,7 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
         )
         
         return html.Div([
-            dcc.Graph(id='volatility-surface-3d', figure=fig_3d, style={"height": "calc(100vh - 300px)"})
+            dcc.Graph(id='volatility-surface-3d', figure=fig_3d, style=GLOBAL_CHART_STYLE)
         ], style=style_card)
     
     elif active_tab == "tab-strike":
@@ -1063,7 +1068,8 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 # Store data (we'll compute open from previous close after the loop)
                 prices_data.append({
                     'timestamp': date,
-                    'price': greeks['price']  # Используем price из BS
+                    'price': greeks['price'],  # Используем price из BS
+                    'iv': iv * 100.0           # Сохраняем IV в %
                 })
                 
                 base_prices.append({
@@ -1108,7 +1114,8 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 'open': open_price,
                 'high': high_price,
                 'low': low_price,
-                'close': price
+                'close': price,
+                'iv': item.get('iv', 0)
             })
             prev_price = price
         
@@ -1133,10 +1140,21 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 ], style={"color": CUSTOM_CSS["text_secondary"]})
             ], style={**style_card, "padding": "40px"})
         
-        # Create the candlestick chart
-        fig = go.Figure()
+        # Calculate IV range for better scaling
+        iv_min = ohlc_df['iv'].min()
+        iv_max = ohlc_df['iv'].max()
+        iv_range = [iv_min - (iv_max - iv_min)*0.1, iv_max + (iv_max - iv_min)*0.1] if iv_max > iv_min else [iv_min - 2, iv_min + 2]
+
+        # Create subplots: Row 1 (Price) 75%, Row 2 (IV) 25%
+        fig = make_subplots(
+            rows=2, cols=1, 
+            shared_xaxes=True, 
+            vertical_spacing=0.04, 
+            row_heights=[0.72, 0.28],
+            specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+        )
         
-        # Add candlestick trace (primary Y-axis)
+        # Add candlestick trace (primary Y-axis, row 1)
         fig.add_trace(go.Candlestick(
             x=ohlc_df['timestamp'],
             open=ohlc_df['open'],
@@ -1145,19 +1163,26 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
             close=ohlc_df['close'],
             name=f"{option_type.upper()} Price",
             increasing_line_color=CUSTOM_CSS["accent_call"],
-            decreasing_line_color=CUSTOM_CSS["accent_put"],
-            yaxis='y'
-        ))
+            decreasing_line_color=CUSTOM_CSS["accent_put"]
+        ), row=1, col=1, secondary_y=False)
         
-        # Add base asset price overlay (secondary Y-axis)
         if not base_df.empty:
             fig.add_trace(go.Scatter(
                 x=base_df['timestamp'],
                 y=base_df['price'],
                 name=f"{currency} Spot",
-                line=dict(color='rgba(150, 150, 150, 0.6)', width=2, dash='dash'),
-                yaxis='y2'
-            ))
+                line=dict(color='rgba(150, 150, 150, 0.6)', width=2, dash='dash')
+            ), row=1, col=1, secondary_y=True)
+            
+        # Add IV trace (row 2)
+        fig.add_trace(go.Scatter(
+            x=ohlc_df['timestamp'],
+            y=ohlc_df['iv'],
+            name="Implied Volatility",
+            line=dict(color=CUSTOM_CSS["accent_iv"], width=2),
+            fill='tozeroy',
+            fillcolor='rgba(155, 89, 182, 0.1)'
+        ), row=2, col=1)
         
         # Calculate title details
         exp_dt = pd.to_datetime(exp_date)
@@ -1170,78 +1195,96 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
         
         # Add horizontal line for current option price (on primary Y-axis)
         if current_option_price is not None:
-            # Add line using add_shape for better control
+            # Add line using add_shape (Extended to reach the left tag)
             fig.add_shape(
                 type="line",
-                xref="paper", x0=0, x1=1,
+                xref="x domain", x0=0.01, x1=0.99, 
                 yref="y", y0=current_option_price, y1=current_option_price,
                 line=dict(
                     width=1.5,
                     color=f"rgba({int(type_color[1:3], 16)}, {int(type_color[3:5], 16)}, {int(type_color[5:7], 16)}, 0.4)"
                 )
             )
-            # Add annotation on the LEFT side
+            # Add annotation on the LEFT side (Restore paper coord - "она хорошо стояла")
             fig.add_annotation(
-                xref="paper", x=0,
+                xref="paper", x=0.01,
                 yref="y", y=current_option_price,
-                text=f"${current_option_price:.2f}",
+                text=f" <b>${current_option_price:.2f}</b> ",
                 showarrow=False,
                 xanchor="left",
-                yanchor="bottom",
-                xshift=5,
-                yshift=3,
-                font=dict(size=9, color=type_color)
+                yanchor="middle",
+                font=dict(size=10, color=type_color),
+                bgcolor="white",
+                bordercolor=type_color,
+                borderwidth=1,
+                borderpad=4
             )
         
         # Add horizontal line for current spot price (on secondary Y-axis)
         if current_spot_price is not None:
-            # Add line using add_shape for better control
+            # Add line using add_shape (Extended to reach the right tag)
             fig.add_shape(
                 type="line",
-                xref="paper", x0=0, x1=1,
+                xref="x domain", x0=0.01, x1=0.96, 
                 yref="y2", y0=current_spot_price, y1=current_spot_price,
                 line=dict(
                     width=1.5,
-                    color="rgba(100, 100, 100, 0.35)"
+                    color="rgba(100, 100, 100, 0.3)"
                 )
             )
-            # Add annotation on the RIGHT side
+            # Add annotation on the RIGHT side (Restore paper coord - "она хорошо стояла")
             fig.add_annotation(
-                xref="paper", x=1,
+                xref="paper", x=0.93,
                 yref="y2", y=current_spot_price,
-                text=f"${current_spot_price:,.2f}",
+                text=f" <b>${current_spot_price:,.2f}</b> ",
                 showarrow=False,
                 xanchor="right",
-                yanchor="bottom",
-                xshift=-5,
-                yshift=3,
-                font=dict(size=9, color="rgba(100, 100, 100, 0.8)")
+                yanchor="middle",
+                font=dict(size=10, color="rgba(60, 60, 60, 1)"),
+                bgcolor="white",
+                bordercolor="rgba(100, 100, 100, 0.5)",
+                borderwidth=1,
+                borderpad=4
             )
         
-        # Layout with dual Y-axes
+        # Layout
         fig.update_layout(
             title=dict(
                 text=f"{currency} ${strike:,.0f} {option_type.upper()} - Expires {exp_dt.strftime('%d %b %Y')} ({dte} days)",
                 font=dict(size=16, color=CUSTOM_CSS["text_primary"], weight=800)
             ),
             xaxis=dict(
-                title="Date",
                 gridcolor='rgba(200, 200, 200, 0.2)',
-                showgrid=True
+                showgrid=True,
+                showticklabels=False # Hide tick labels for Row 1
+            ),
+            xaxis2=dict(
+                title=None,
+                gridcolor='rgba(200, 200, 200, 0.2)',
+                showgrid=True,
+                tickfont=dict(size=8) # Уменьшен шрифт даты/времени
             ),
             yaxis=dict(
-                title=dict(text=f"{option_type.capitalize()} Option Price ($)", font=dict(color=type_color)),
-                tickfont=dict(color=type_color),
+                title=dict(text="Option Price ($)", font=dict(color=type_color, size=11)),
+                tickfont=dict(color=type_color, size=10),
                 side='left',
                 showgrid=True,
-                gridcolor='rgba(200, 200, 200, 0.2)'
+                gridcolor='rgba(200, 200, 200, 0.1)'
             ),
             yaxis2=dict(
-                title=dict(text=f"{currency} Spot Price ($)", font=dict(color='gray')),
-                tickfont=dict(color='gray'),
-                overlaying='y',
+                title=dict(text="Spot Price ($)", font=dict(color='gray', size=11)),
+                tickfont=dict(color='gray', size=10),
                 side='right',
                 showgrid=False
+            ),
+            yaxis3=dict(
+                title=dict(text="IV (%)", font=dict(color=CUSTOM_CSS["accent_iv"], size=11)),
+                tickfont=dict(color=CUSTOM_CSS["accent_iv"], size=10),
+                side='left',
+                showgrid=True,
+                gridcolor='rgba(200, 200, 200, 0.1)',
+                range=iv_range, # Явный диапазон для масштабирования
+                fixedrange=False
             ),
             plot_bgcolor='white',
             paper_bgcolor='white',
@@ -1253,15 +1296,20 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
                 xanchor="right",
                 x=1
             ),
-            margin=dict(t=60, b=50, l=70, r=70),
-            xaxis_rangeslider_visible=False  # Disable range slider for cleaner look
+            margin=dict(t=60, b=45, l=90, r=90), # Balanced margins
+            xaxis_rangeslider_visible=False,
+            autosize=True
         )
         
         # Current time marker: removed due to Plotly compatibility issues
         
         return html.Div([
-            dcc.Graph(figure=fig, config={'displayModeBar': True}, style={"height": "calc(100vh - 300px)"})
-        ], style=style_card)
+            dcc.Graph(
+                figure=fig, 
+                config={'displayModeBar': True, 'responsive': True},
+                style=GLOBAL_CHART_STYLE
+            )
+        ], style={**style_card, "paddingBottom": "10px"})
 
     return html.Div("Unknown Tab")
 
