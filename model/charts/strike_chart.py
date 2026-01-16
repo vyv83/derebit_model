@@ -2,6 +2,7 @@
 Strike Chart Builder
 ====================
 Renders strike chart with OHLC candlesticks and optional IV/Theta subplots.
+Inherits from BaseChartBuilder for consistent interface.
 """
 
 import pandas as pd
@@ -12,26 +13,30 @@ from dash import dcc, html
 from config.theme import CUSTOM_CSS, CHART_THEME, GLOBAL_CHART_STYLE, style_card, apply_chart_theme
 from config.dashboard_config import RISK_FREE_RATE, SUBPLOT_CONFIG
 from core.black_scholes import black_scholes_safe
+from charts.base_chart import BaseChartBuilder
 
 
-class StrikeChartBuilder:
+class StrikeChartBuilder(BaseChartBuilder):
     """
     Builds strike chart with OHLC candlesticks and dynamic subplots.
     Generates option price history on-the-fly using the model.
+    
+    Inherits from BaseChartBuilder for OOP consistency.
+    
+    Args:
+        model: Option pricing model
+        provider: Data provider for market state
+        timeseries_provider: Timeseries data provider
+        greeks_service: Optional GreeksCalculationService for BS calculations.
     """
     
-    def __init__(self, model, provider, timeseries_provider):
-        """
-        Initialize StrikeChartBuilder.
-        
-        Args:
-            model: Option pricing model
-            provider: Data provider for market state
-            timeseries_provider: Timeseries data provider
-        """
+    def __init__(self, model, provider, timeseries_provider, greeks_service=None):
+        """Initialize StrikeChartBuilder with optional service dependency."""
+        super().__init__()
         self.model = model
         self.provider = provider
         self.timeseries_provider = timeseries_provider
+        self.greeks_service = greeks_service
     
     def _generate_ohlc_data(self, strike, option_type, exp_date, current_time, timestamps_store, currency):
         """

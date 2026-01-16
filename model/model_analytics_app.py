@@ -44,13 +44,19 @@ import plotly.graph_objects as go
 import os
 import sys
 from datetime import datetime, timedelta
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Ensure local imports work regardless of CWD
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-from model_wrapper import OptionModel
+# NEW: Updated to use ml package instead of root
+from ml import OptionModel
 from daily_data_provider import DailyFeatureProvider
 from deribit_option_logic import generate_deribit_expirations, generate_deribit_strikes, get_birth_date, calculate_time_layers
 from option_timeseries_provider import OptionTimeseriesProvider
@@ -65,6 +71,9 @@ from charts.smile_chart import render_smile_chart
 from charts.surface_chart import render_surface_chart
 from charts.board_renderer import BoardRenderer
 from charts.strike_chart import StrikeChartBuilder
+
+# NEW: Import services for business logic orchestration
+from services import GreeksCalculationService
 
 # ============================================================================
 # КОНСТАНТЫ (ИСПРАВЛЕНО 2026-01-15)
@@ -117,18 +126,23 @@ try:
     # Initialize timeseries provider for candlestick charts
     timeseries_provider = OptionTimeseriesProvider()
     
-    # Initialize Strike Chart Builder
-    strike_chart_builder = StrikeChartBuilder(model, provider, timeseries_provider)
+    # Initialize Greeks Calculation Service
+    greeks_service = GreeksCalculationService(model)
+    logger.info("Greeks service initialized")
     
-    print("CORE INITIALIZED SUCCESSFULLY")
+    # Initialize Strike Chart Builder with greeks service
+    strike_chart_builder = StrikeChartBuilder(model, provider, timeseries_provider, greeks_service)
+    
+    logger.info("Core initialized successfully")
 except Exception as e:
-    print(f"FAILED TO INITIALIZE CORE: {e}")
+    logger.error(f"Failed to initialize core: {e}")
     import traceback
     traceback.print_exc()
     model = None
     provider = None
     timeseries_provider = None
     strike_chart_builder = None
+    greeks_service = None
 
 # --- Styling & Configuration ---
 # Все стили и конфигурация теперь импортируются из модулей:
@@ -149,7 +163,7 @@ app.layout = layout_builder.build()
     [Input("currency-selector", "value")]
 )
 def update_periods(currency):
-    print(f"TRIGGER: update_periods for {currency}")
+    logger.debug(f"Update periods triggered for {currency}")
     # Return just recent years
     years = ['2021', '2022', '2023', '2024', '2025']
     options = [{"label": y, "value": y} for y in years]
@@ -216,7 +230,7 @@ def update_time_slider_logic(currency, period, play_clicks, back_clicks, current
     [State('currency-selector', 'value')]
 )
 def update_market_state(slider_idx, timestamps, currency):
-    print(f"MARKET_STATE_CB: idx={slider_idx}, len_ts={len(timestamps) if timestamps else 0}")
+    logger.debug(f"Market state callback: idx={slider_idx}, timestamps={len(timestamps) if timestamps else 0}")
     # Ensure raw types and existence
     if not timestamps:
         return {}, "-", "-", "-", "TIME SNAPSHOT: -"
@@ -233,7 +247,7 @@ def update_market_state(slider_idx, timestamps, currency):
         idx = 0
         
     target_ts = timestamps[idx]
-    print(f"DEBUG: Processing TS {target_ts}")
+    logger.debug(f"Processing timestamp: {target_ts}")
     state = provider.get_market_state(target_ts)
     
     if not state:
@@ -381,7 +395,7 @@ def render_content(active_tab, prediction_data, market_state, selected_dtes, sel
         return render_smile_chart(df, market_state, selected_dtes)
         
     elif active_tab == "tab-board":
-        board_renderer = BoardRenderer()
+        board_renderer = BoardRenderer(greeks_service)
         return board_renderer.render(df, market_state, selected_dtes, last_board_tab)
         
     elif active_tab == "tab-surface":
@@ -410,7 +424,7 @@ def handle_grid_click(cell_clicked_list, market_state, row_data_list):
     Handles clicks on any grid cell from any expiration tab.
     Extracts strike, expiration, and option type.
     """
-    print(f"[GRID CLICK] Received {len(cell_clicked_list)} grids cell_clicked")
+    logger.debug(f"Grid click received: {len(cell_clicked_list)} grids")
     
     if not cell_clicked_list or not market_state:
         return dash.no_update, dash.no_update
@@ -439,7 +453,7 @@ def handle_grid_click(cell_clicked_list, market_state, row_data_list):
     
     # Ignore clicks on strike column
     if col_id == 'strike_price':
-        print(f"[GRID CLICK] Ignoring click on strike column")
+        logger.debug("Grid click ignored: strike column")
         return dash.no_update, dash.no_update
     
     # Determine option type from column ID
@@ -450,7 +464,7 @@ def handle_grid_click(cell_clicked_list, market_state, row_data_list):
         option_type = 'put'
     else:
         # Unknown column, ignore
-        print(f"[GRID CLICK] Ignoring click on unknown column {col_id}")
+        logger.debug(f"Grid click ignored: unknown column {col_id}")
         return dash.no_update, dash.no_update
     
     # Get expiration date from the triggered grid's ID
@@ -474,10 +488,10 @@ def handle_grid_click(cell_clicked_list, market_state, row_data_list):
                     'type': option_type,
                     'exp_date': exp_date
                 }
-                print(f"[GRID CLICK] Selected: {strike} {option_type.upper()} exp {exp_date}")
+                logger.info(f"Strike selected: {strike} {option_type.upper()} exp {exp_date}")
                 return result, 'tab-strike'
     
-    print(f"[GRID CLICK] Failed to extract full data")
+    logger.warning("Grid click: failed to extract full data")
     return dash.no_update, dash.no_update
 
 @callback(
@@ -486,7 +500,7 @@ def handle_grid_click(cell_clicked_list, market_state, row_data_list):
     prevent_initial_call=True
 )
 def store_board_tab(active_tab):
-    print(f"[BOARD TAB] Switched to: {active_tab}")
+    logger.debug(f"Board tab switched to: {active_tab}")
     return active_tab
 
 @callback(
@@ -510,7 +524,7 @@ def auto_activate_board_subtab(selected_dtes, current_active, previous_dtes):
     if current_active and current_active not in selected_dtes:
         sorted_dtes = sorted(selected_dtes)
         new_active = sorted_dtes[0]
-        print(f"[AUTO BOARD TAB] Current tab removed, switching to: {new_active}")
+        logger.debug(f"Auto board tab: current removed, switching to {new_active}")
         return new_active, selected_dtes
     
     # Определяем, какая экспирация была добавлена (сравниваем с предыдущим состоянием)
@@ -522,7 +536,7 @@ def auto_activate_board_subtab(selected_dtes, current_active, previous_dtes):
     if newly_added:
         # Берем первую (и обычно единственную) добавленную экспирацию
         new_active = list(newly_added)[0]
-        print(f"[AUTO BOARD TAB] Auto-activated newly added: {new_active}")
+        logger.debug(f"Auto board tab: activated newly added {new_active}")
         return new_active, selected_dtes
     
     # Если ничего не изменилось, сохраняем текущее состояние
@@ -627,20 +641,20 @@ def set_default_strike(market_state, active_tab):
     Uses current BTC price to find a realistic ATM strike.
    """
     if active_tab == 'tab-strike' and market_state:
-        print(f"[STRIKE SELECTION] Setting default test strike")
+        logger.debug("Setting default test strike")
         current_date = pd.to_datetime(market_state.get('target_ts'))
         currency = market_state.get('currency', 'BTC')
         
         # Get current price from market state
         current_price = market_state.get('index_price')
         if not current_price:
-            print(f"[STRIKE SELECTION] No index price available")
+            logger.debug("Strike selection: no index price available")
             return dash.no_update
             
         # Get first available expiration
         exps = generate_deribit_expirations(current_date)
         if not exps:
-            print(f"[STRIKE SELECTION] No expirations available")
+            logger.debug("Strike selection: no expirations available")
             return dash.no_update
             
         first_exp = exps[0][0]
@@ -670,7 +684,7 @@ def set_default_strike(market_state, active_tab):
             'type': 'call',
             'exp_date': exp_date_str
         }
-        print(f"[STRIKE SELECTION] Default: {default_strike} (current {currency} price: {current_price})")
+        logger.info(f"Default strike selected: {default_strike} (current {currency} price: {current_price})")
         return default_strike
     
     return dash.no_update

@@ -186,7 +186,6 @@ class LayoutBuilder:
             dcc.Store(id='board-active-tab-store', data=None),
             dcc.Store(id='previous-dte-selection-store', data=[]),
             dcc.Store(id='selected-strike-store'),
-            dcc.Store(id='iv-visibility-store', data=True),
             
             dbc.Container([
                 # Header

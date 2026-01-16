@@ -2,6 +2,7 @@
 Options Board Renderer
 ======================
 Renders options board with Greeks enrichment using hybrid NN+BS approach.
+Inherits from BaseChartBuilder for consistent interface.
 """
 
 import pandas as pd
@@ -12,17 +13,25 @@ from dash import html
 from config.theme import CUSTOM_CSS, GLOBAL_CHART_STYLE
 from config.dashboard_config import RISK_FREE_RATE
 from core.black_scholes import black_scholes_safe
+from charts.base_chart import BaseChartBuilder
 
 
-class BoardRenderer:
+class BoardRenderer(BaseChartBuilder):
     """
     Renders options board with AG Grid.
     Uses hybrid approach: NN for IV/Delta/Vega, BS for Gamma/Theta/Price.
+    
+    Inherits from BaseChartBuilder for OOP consistency.
+    
+    Args:
+        greeks_service: Optional GreeksCalculationService for BS calculations.
+                       If not provided, falls back to direct black_scholes_safe() calls.
     """
     
-    def __init__(self):
-        """Initialize BoardRenderer."""
-        pass
+    def __init__(self, greeks_service=None):
+        """Initialize BoardRenderer with optional service dependency."""
+        super().__init__()
+        self.greeks_service = greeks_service
     
     def _enrich_with_bs_greeks(self, row, spot, T, option_type):
         """

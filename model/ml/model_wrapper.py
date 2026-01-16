@@ -22,7 +22,7 @@ BS гарантирует no-arbitrage pricing через единую форм�
 import torch
 import pandas as pd
 import numpy as np
-from architecture import ImprovedMultiTaskSVI
+from .model_architecture import ImprovedMultiTaskSVI
 
 class OptionModel:
     def __init__(self, model_path='model/best_multitask_svi.pth'):
