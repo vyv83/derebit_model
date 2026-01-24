@@ -116,11 +116,11 @@ app.index_string = '''
 
 # Load Model and Provider
 try:
-    model_path = os.path.join(BASE_DIR, 'best_multitask_svi.pth')
+    model_path = os.path.join(BASE_DIR, '../best_multitask_svi.pth')
     model = OptionModel(model_path=model_path)
     
-    price_csv = os.path.join(BASE_DIR, 'btc_full_history.csv')
-    vol_csv = os.path.join(BASE_DIR, 'btc_dvol_history.csv')
+    price_csv = os.path.join(BASE_DIR, '../btc_full_history.csv')
+    vol_csv = os.path.join(BASE_DIR, '../btc_dvol_history.csv')
     provider = DailyFeatureProvider(price_file=price_csv, dvol_file=vol_csv)
     
     # Initialize timeseries provider for candlestick charts

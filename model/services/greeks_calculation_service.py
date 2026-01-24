@@ -92,7 +92,7 @@ class GreeksCalculationService:
         # Шаг 3: Для каждого страйка рассчитать BS Greeks
         for i, strike in enumerate(strikes):
             # NN outputs
-            iv = nn_predictions['iv'][i]
+            iv = nn_predictions['mark_iv'][i]
             delta = nn_predictions['delta'][i]
             vega = nn_predictions['vega'][i]
             
@@ -104,7 +104,7 @@ class GreeksCalculationService:
                 K=strike,
                 T=dte_years,
                 r=risk_free_rate,
-                sigma=iv,
+                sigma=iv / 100.0,
                 option_type='call' if is_call else 'put'
             )
             

@@ -25,7 +25,7 @@ import numpy as np
 from .model_architecture import ImprovedMultiTaskSVI
 
 class OptionModel:
-    def __init__(self, model_path='model/best_multitask_svi.pth'):
+    def __init__(self, model_path='best_multitask_svi.pth'):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Load the full package
