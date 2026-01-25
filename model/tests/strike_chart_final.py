@@ -78,8 +78,8 @@ GREEK_SYMBOLS = {
 class ChartConfig:
     """Configuration for Strike Chart layout and styling."""
     # Layout borders
-    min_border_left: int = 100
-    min_border_right: int = 100
+    min_border_left: int = 50
+    min_border_right: int = 50
     xaxis_height: int = 40  # Height for X-axis area (unified!)
     
     # Heights
@@ -937,7 +937,7 @@ def create_toggle_js(toggles, greek_plots, main_plot, legend_div, src_ohlc, src_
                 greek_plots[i].height = greekHeight;
                 greek_plots[i].min_border_bottom = 0; // ZERO gaps
                 greek_plots[i].min_border_top = 0;    // ZERO gaps
-                greek_plots[i].min_border_right = 100;
+                greek_plots[i].min_border_right = 50;
                 setRightYAxisVisible(greek_plots[i], true);
             }} else {{
                 greek_plots[i].visible = false;
@@ -1227,8 +1227,8 @@ def create_strike_chart_from_dataframes(df_ohlc, df_spot, df_greeks):
     pass
     
     # NEW: Unified Layout Manager
-    # Увеличиваем fixed_overhead до 190, чтобы гарантировать видимость оси снизу
-    fixed_overhead = 190 
+    # Fixed overhead for header (approx 50) + controls (approx 50) + padding
+    fixed_overhead = 140 
     layout_cb = get_layout_manager_js(
         main_plot=p_main,
         greek_plots=greek_plots,

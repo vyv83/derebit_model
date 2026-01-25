@@ -18,7 +18,7 @@ def create_integrated_axis_plot(shared_x_range, config, colors, source):
         min_border_left=config.min_border_left,
         min_border_right=config.min_border_right,
         min_border_top=0,
-        min_border_bottom=20, # Ровно столько, чтобы влезли метки дат
+        min_border_bottom=25, # Ровно столько, чтобы влезли метки дат
         tools='',
         toolbar_location=None,
         outline_line_color=None,
