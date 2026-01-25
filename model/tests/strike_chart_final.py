@@ -102,6 +102,24 @@ CONFIG = ChartConfig()
 MIN_BORDER_LEFT = CONFIG.min_border_left
 MIN_BORDER_RIGHT = CONFIG.min_border_right
 XAXIS_HEIGHT = CONFIG.xaxis_height
+
+# ============================================================================
+# UNIFIED PANEL STYLING (SINGLE SOURCE OF TRUTH)
+# ============================================================================
+PANEL_STYLE = """
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px;
+    padding: 6px 15px;
+    background: linear-gradient(90deg, rgba(255,255,255,0.98), rgba(248,249,250,0.98));
+    border-radius: 6px;
+    border: 1px solid #e0e0e0;
+    display: inline-flex;
+    gap: 15px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    align-items: center;
+    height: 36px;
+    box-sizing: border-box;
+"""
 # ============================================================================
 # DATA GENERATION / DataFrame Support
 # ============================================================================
@@ -710,7 +728,10 @@ def create_autoscale_js_greek(plot, src) -> CustomJS:
 # ============================================================================
 # DYNAMIC LEGEND SYNC - JavaScript для обновления легенды при наведении
 # ============================================================================
-def create_legend_sync_js(legend_div, src_ohlc, src_spot, src_greeks, all_spans, toggles):
+# ============================================================================
+# DYNAMIC LEGEND SYNC - JavaScript для обновления легенды при наведении
+# ============================================================================
+def create_legend_sync_js(legend_div, src_ohlc, src_spot, src_greeks, all_spans, toggles, panel_style):
     """
     Creates JS callback to update legend on hover.
     ONLY SHOWS VALUES FOR ACTIVE GREEKS.
@@ -726,7 +747,8 @@ def create_legend_sync_js(legend_div, src_ohlc, src_spot, src_greeks, all_spans,
         src_vega=src_greeks['vega'],
         spans=all_spans,
         toggles=toggles,
-        colors=COLORS
+        colors=COLORS,
+        panel_style=panel_style
     ), code="""
         const geometry = cb_data.geometry;
         const x = geometry.x;
@@ -798,17 +820,7 @@ def create_legend_sync_js(legend_div, src_ohlc, src_spot, src_greeks, all_spans,
         
         // Update legend HTML
         legend_div.text = `
-            <div style="
-                font-family: 'SF Mono', Monaco, monospace;
-                font-size: 11px;
-                padding: 8px 15px;
-                background: linear-gradient(90deg, rgba(255,255,255,0.98), rgba(248,249,250,0.98));
-                border-radius: 6px;
-                border: 1px solid #e0e0e0;
-                display: inline-flex;
-                gap: 20px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            ">
+            <div style="${panel_style}">
                 <span style="color:#666; font-weight: 500;">${dateStr}</span>
                 <span style="color:${colors.call}; font-weight: 600;">O:${o} H:${h} L:${l} C:${c}</span>
                 <span style="color:${colors.spot};">Spot: $${spot}</span>
@@ -852,7 +864,8 @@ def create_toggle_js(toggles, greek_plots, main_plot, legend_div, src_ohlc, src_
         src_delta=src_greeks['delta'],
         src_gamma=src_greeks['gamma'],
         src_vega=src_greeks['vega'],
-        colors=COLORS
+        colors=COLORS,
+        panel_style=PANEL_STYLE
     )
     
     js_code = f"""
@@ -982,17 +995,7 @@ def create_toggle_js(toggles, greek_plots, main_plot, legend_div, src_ohlc, src_
             
             // Update legend HTML
             legend_div.text = `
-                <div style="
-                    font-family: 'SF Mono', Monaco, monospace;
-                    font-size: 11px;
-                    padding: 8px 15px;
-                    background: linear-gradient(90deg, rgba(255,255,255,0.98), rgba(248,249,250,0.98));
-                    border-radius: 6px;
-                    border: 1px solid #e0e0e0;
-                    display: inline-flex;
-                    gap: 20px;
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-                ">
+                <div style="${{panel_style}}">
                     <span style="color:#666; font-weight: 500;">${{dateStr}}</span>
                     <span style="color:${{colors.call}}; font-weight: 600;">O:${{o}} H:${{h}} L:${{l}} C:${{c}}</span>
                     <span style="color:${{colors.spot}};">Spot: ${{spot}}</span>
@@ -1013,6 +1016,73 @@ def create_toggle_js(toggles, greek_plots, main_plot, legend_div, src_ohlc, src_
         callbacks.append(callback)
     
     return callbacks
+
+def create_controls_update_js(controls_div, toggles, colors, panel_style):
+    """
+    Creates JS callback to update custom HTML controls when toggles change.
+    """
+    return CustomJS(args=dict(toggles=toggles, div=controls_div, colors=colors, symbols=GREEK_SYMBOLS, panel_style=panel_style), code="""
+        const keys = ['iv', 'theta', 'delta', 'gamma', 'vega'];
+        
+        let html = `<div style="${panel_style}">`;
+        
+        // Global handler for clicks
+        if (!window.toggleGreek) {
+            window.toggleGreek = function(id) {
+                // Try to find model in document
+                let toggle = null;
+                if (Bokeh.documents && Bokeh.documents.length > 0) {
+                     toggle = Bokeh.documents[0].get_model_by_id(id);
+                }
+                
+                if (toggle) {
+                    toggle.active = !toggle.active;
+                } else {
+                    console.error("Toggle not found:", id);
+                }
+            }
+        }
+
+        for (let i = 0; i < toggles.length; i++) {
+            const t = toggles[i];
+            const key = keys[i];
+            const color = colors[key];
+            const active = t.active;
+            
+            const border = active ? `1px solid ${color}` : "1px solid #ced4da";
+            const textColor = active ? color : "#7F8C8D";
+            const bg = "rgba(255,255,255,0.8)";
+            const sym = symbols[key];
+            
+            const btnStyle = `
+                padding: 0 8px;
+                height: 22px;
+                border-radius: 3px;
+                font-size: 10px;
+                border: ${border};
+                color: ${textColor};
+                background-color: ${bg};
+                box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                transition: all 0.2s;
+                outline: none;
+                line-height: 1;
+            `;
+            
+            const onclick = `window.toggleGreek('${t.id}')`;
+            
+            html += `
+            <button type="button" style="${btnStyle}" onclick="${onclick}">
+                <span style="font-size: 9px; opacity: 0.9; font-weight: 700;">${sym} ${key.toUpperCase()}</span>
+            </button>
+            `;
+        }
+        html += '</div>';
+        div.text = html;
+    """)
 # ============================================================================
 # MAIN - CREATE FULL CHART
 # ============================================================================
@@ -1095,19 +1165,11 @@ def create_strike_chart_from_dataframes(df_ohlc, df_spot, df_greeks):
     all_spans = create_sync_crosshair_spans(all_plots)
     
     # ==================== DYNAMIC LEGEND ====================
+    # ==================== DYNAMIC LEGEND ====================
     legend_display = Div(
         text=f'''
-        <div style="
-            font-family: 'SF Mono', Monaco, monospace;
-            font-size: 11px;
-            padding: 8px 15px;
-            background: linear-gradient(90deg, rgba(255,255,255,0.98), rgba(248,249,250,0.98));
-            border-radius: 6px;
-            border: 1px solid #e0e0e0;
-            display: inline-flex;
-            gap: 20px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        ">
+        <div style="{PANEL_STYLE}">
+            <span style="color:{COLORS['call']}; font-weight: 600;">
             <span style="color:{COLORS['call']}; font-weight: 600;">
                 O:{src_ohlc.data['close'][-1]:.2f}
                 H:{max(src_ohlc.data['high']):.2f}
@@ -1129,7 +1191,7 @@ def create_strike_chart_from_dataframes(df_ohlc, df_spot, df_greeks):
     
     # Legend sync callback attached to main chart hover
     legend_sync_cb = create_legend_sync_js(
-        legend_display, src_ohlc, src_spot, src_greeks, all_spans, toggles
+        legend_display, src_ohlc, src_spot, src_greeks, all_spans, toggles, PANEL_STYLE
     )
     mouseleave_cb = create_mouseleave_js(all_spans)
     
@@ -1180,6 +1242,7 @@ def create_strike_chart_from_dataframes(df_ohlc, df_spot, df_greeks):
     toggle_cbs = create_toggle_js(
         toggles, greek_plots, p_main,
         legend_display, src_ohlc, src_spot, src_greeks,
+        base_total_height=700, # Explicitly pass base height
         fixed_overhead=fixed_overhead
     )
     
@@ -1229,16 +1292,72 @@ def create_strike_chart_from_dataframes(df_ohlc, df_spot, df_greeks):
         </div>
     ''', sizing_mode='stretch_width')
     
-    # ==================== CONTROLS ROW ====================
-    toggle_label = Div(text='''
-        <span style="font-size: 12px; color: #666; font-weight: 500;">Greeks:</span>
-    ''', width=60, height=32)
+    # ==================== CONTROLS ROW (CUSTOM HTML) ====================
+    # 1. Callback для обновления HTML при изменении Toggles
+    # Убираем sizing_mode='stretch_width', чтобы он не занимал всю ширину
+    controls_div = Div(text="", height=40) 
     
-    toggle_row = row(
-        toggle_label,
-        *toggles,
-        sizing_mode='stretch_width',
-    )
+    update_controls_js = create_controls_update_js(controls_div, toggles, COLORS, PANEL_STYLE)
+    
+    # 2. Привязываем callback ко всем toggles
+    for t in toggles:
+        t.js_on_change('active', update_controls_js)
+        
+    # 3. Генерируем начальный HTML (Python side) USING UNIFIED STYLE
+    initial_html = f'<div style="{PANEL_STYLE}">'
+    for i, key in enumerate(GREEKS):
+        t = toggles[i]
+        # Начальное состояние - active=True
+        color = COLORS[key]
+        border = f"1px solid {color}"
+        text_color = color
+        
+        btn_style = f"""
+            padding: 0 8px;
+            height: 22px;
+            border-radius: 3px;
+            font-size: 10px;
+            border: {border};
+            color: {text_color};
+            background-color: rgba(255,255,255,0.8);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            transition: all 0.2s;
+            outline: none;
+            line-height: 1;
+        """
+        
+        # Inject script for global helper if needed (handled in JS above but need initial onclick)
+        onclick = f"window.toggleGreek('{t.id}')"
+        
+        initial_html += f"""
+        <button type="button" style="{btn_style}" onclick="{onclick}">
+            <span style="font-size: 9px; opacity: 0.9; font-weight: 700;">{GREEK_SYMBOLS[key]} {key.upper()}</span>
+        </button>
+        """
+    initial_html += '</div>'
+    
+    # Добавляем скрипт инициализации глобальной функции
+    initial_html += """
+    <script>
+        if (!window.toggleGreek) {
+            window.toggleGreek = function(id) {
+                if (Bokeh.documents && Bokeh.documents.length > 0) {
+                     const toggle = Bokeh.documents[0].get_model_by_id(id);
+                     if (toggle) toggle.active = !toggle.active;
+                }
+            }
+        }
+    </script>
+    """
+    
+    controls_div.text = initial_html
+    
+    # Скрытый ряд для реальных моделей Toggle (чтобы они были в документе)
+    hidden_toggles = row(toggles, visible=False)
     
     # ==================== ASSEMBLE LAYOUT ====================
     all_charts = finalize_layout(p_main, greek_plots, axis_plot)
@@ -1247,11 +1366,20 @@ def create_strike_chart_from_dataframes(df_ohlc, df_spot, df_greeks):
     axis_plot.xaxis.visible = True
     axis_plot.min_border_bottom = 25
     
+    # Панель управления и легенды в одну строку
+    # Используем row() для размещения их рядом
+    control_panel = row(
+        controls_div, 
+        Spacer(width=20), 
+        legend_display, 
+        sizing_mode='stretch_width'
+    )
+    
     layout = column(
         header,
-        toggle_row,
-        legend_display,
+        control_panel,          # Buttons + Legend in one row
         all_charts,
+        hidden_toggles,         # Invisible logic models
         sizing_mode='stretch_both'
     )
     
