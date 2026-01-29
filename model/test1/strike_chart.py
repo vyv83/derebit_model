@@ -44,7 +44,7 @@ from bokeh_workarounds import (
 from bokeh_components import (
     ChartTheme, GreekConfig, ChartConfig, CONFIG,
     HeightCalculator, TogglePanel, ToggleCallbackBuilder,
-    HoverSyncBuilder, PlotFactory
+    HoverSyncBuilder, PlotFactory, UIFactory
 )
 
 
@@ -486,8 +486,8 @@ def create_strike_chart(
     controls_div = TogglePanel.create_html_controls(toggles)
     
     # Используем интегрированную логику высот
-    # Возвращаем немного больше места для комфортных отступов
-    fixed_overhead = 120
+    # Уменьшаем overhead т.к. заголовок удален (остались только кнопки)
+    fixed_overhead = 55 
     axis_h = 25
     layout_cb = get_layout_manager_js(
         p_main, greek_plots, toggles, None, fixed_overhead, axis_h
@@ -503,35 +503,9 @@ def create_strike_chart(
     render_ms = (time.time() - t0) * 1000
     
     # ==================== HEADER ====================
-    header = Div(text=f'''
-        <div style="
-            display: flex;
-            align-items: center;
-            gap: 20px;
-            padding: 10px 0;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            border-bottom: 1px solid #eee;
-            margin-bottom: 5px;
-        ">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 18px; font-weight: 700; color: {ChartTheme.TEXT};">
-                    {title}
-                </span>
-                <span style="
-                    font-size: 12px;
-                    color: #888;
-                    background: #f5f5f5;
-                    padding: 2px 8px;
-                    border-radius: 4px;
-                ">
-                    {expiry}
-                </span>
-            </div>
-            <div style="font-size: 11px; color: #999; margin-left: auto;">
-                Render: {render_ms:.0f}ms | Bokeh Strike Chart v7.0
-            </div>
-        </div>
-    ''', sizing_mode='stretch_width')
+    # ==================== HEADER ====================
+    # Заголовок удален по требованию
+    header = Div(text="", sizing_mode='stretch_width', height=0)
     
     # ==================== LAYOUT ====================
     # Используем функцию интегратор для сборки стопки графиков
@@ -588,7 +562,8 @@ def create_strike_chart(
     </style>
     '''
     
-    html = html.replace('</head>', f'{responsive_css}{extra_styles}{init_script}</head>')
+    style_block = f"<style>{UIFactory.HEADER_CSS}</style>"
+    html = html.replace('</head>', f'{style_block}{responsive_css}{extra_styles}{init_script}</head>')
     
     print(f'✅ Chart created in {render_ms:.0f}ms')
     print(f'   Main: {main_h}px, Greeks: {greek_h}px each (x{n_active})')

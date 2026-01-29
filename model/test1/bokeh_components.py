@@ -92,6 +92,75 @@ PANEL_STYLE = """
 """
 
 # ============================================================================
+# UI FACTORY - ЕДИНЫЙ КОНСТРУКТОР ИНТЕРФЕЙСА
+# ============================================================================
+class UIFactory:
+    """Генерирует общие компоненты интерфейса (шапки, кнопки) для всех графиков."""
+    
+    HEADER_CSS = f"""
+    .unified-header {{
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        padding: 5px 0;
+        margin-bottom: 5px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        border-bottom: 1px solid #eee;
+        width: 100%;
+        box-sizing: border-box;
+    }}
+    .header-title-group {{
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }}
+    .header-title {{
+        font-size: 16px; 
+        font-weight: 700; 
+        color: {COLORS['text']};
+        white-space: nowrap;
+    }}
+    .header-info-tag {{
+        font-size: 11px;
+        color: #777;
+        background: #f0f2f5;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-family: 'SF Mono', Monaco, monospace;
+    }}
+    .header-controls {{
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }}
+    .header-render-info {{
+        font-size: 10px;
+        color: #bbb;
+        text-align: right;
+    }}
+    """
+
+    @staticmethod
+    def create_header(title: str, tags: List[str], render_ms: Optional[float] = None, extra_html: str = "") -> str:
+        """Создает HTML-код шапки."""
+        tags_html = "".join([f'<span class="header-info-tag">{tag}</span>' for tag in tags])
+        render_html = f'<div class="header-render-info">Render: {render_ms:.0f}ms</div>' if render_ms is not None else ""
+        
+        return f'''
+        <div class="unified-header">
+            <div class="header-title-group">
+                <span class="header-title">{title}</span>
+                {tags_html}
+            </div>
+            <div class="header-controls">
+                {extra_html}
+                {render_html}
+            </div>
+        </div>
+        '''
+
+# ============================================================================
 # CHART CONFIGURATION (из 1.txt)
 # ============================================================================
 @dataclass(frozen=True)
@@ -235,8 +304,10 @@ class TogglePanel:
                 const key = keys[i];
                 const color = colors[key];
                 const active = t.active;
+                // Use basic logic to mimic get_button_style
                 const border = active ? `1px solid ${color}` : "1px solid #ced4da";
                 const textColor = active ? color : "#7F8C8D";
+                
                 const btnStyle = `padding: 0 8px; height: 22px; border-radius: 3px; font-size: 10px; border: ${border}; color: ${textColor}; background-color: rgba(255,255,255,0.8); box-shadow: 0 1px 3px rgba(0,0,0,0.05); cursor: pointer; display: flex; align-items: center; font-family: -apple-system, BlinkMacSystemFont, sans-serif; transition: all 0.2s; outline: none; line-height: 1;`;
                 const onclick = `window.toggleGreek('${t.id}')`;
                 const sym = symbols[key];
