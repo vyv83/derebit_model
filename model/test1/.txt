@@ -1,0 +1,3932 @@
+Начинаю. Будет 4 файла. Из-за объёма кода возможно понадобится несколько сообщений.
+
+ФАЙЛ 1: bokeh_workarounds.py
+Copy"""
+ФАЙЛ: bokeh_workarounds.py
+ОПИСАНИЕ: Слой 1 - Инкапсуляция всех известных проблем/багов Bokeh.
+          Этот модуль СКРЫВАЕТ все костыли библиотеки и предоставляет чистый API.
+
+ЗАВИСИМОСТИ: bokeh
+
+СПИСОК РЕШЁННЫХ ПРОБЛЕМ BOKEH:
+1.  CrosshairTool не синхронизируется между plots (#3799)
+2.  Y-axis не автомасштабируется при pan/zoom (#7475)
+3.  visible=False не убирает из layout - используем height=0
+4.  extra_y_ranges не масштабируется независимо (#13302)
+5.  min_border/spacing не работает корректно (#4164)
+6.  Label не sticky к viewport
+7.  HoverTool не синхронизируется между plots (#14066)
+8.  sizing_mode='stretch_both' сломан (#12614)
+9.  X-axis дублируется/не выравнивается (#5572)
+10. Toggle styling ограничен
+11. Candlestick нет встроенного - собираем из segment + vbar
+12. Legend не обновляется динамически
+13. Multiple callbacks на одно property (#6508)
+14. change.emit() не всегда обновляет view
+15. Zoom блокируется когда один край на bounds (#6708)
+16. vbar width в datetime требует миллисекунды
+17. desired_num_ticks игнорируется
+18. Window resize не поддерживается (#11602)
+19. get_model_by_id может вернуть null
+
+ТЕСТ: Этот файл не запускается отдельно - используется другими модулями.
+"""
+
+from bokeh.models import (
+    CustomJS, Span, Range1d, LinearAxis, Label, Div, Toggle,
+    HoverTool, BasicTicker, NumeralTickFormatter, ColumnDataSource
+)
+from bokeh.plotting import figure
+from bokeh.models.formatters import DatetimeTickFormatter
+
+
+# ============================================================================
+# WORKAROUND #1, #7: CrosshairSync - Синхронизация crosshair между plots
+# Проблема: CrosshairTool не линкуется между графиками
+# Решение: Создаём Span на каждом графике + CustomJS для синхронизации
+# ============================================================================
+
+class CrosshairSync:
+    """
+    Создаёт синхронизированный crosshair на нескольких графиках.
+    
+    Использование:
+        spans = CrosshairSync.create_spans(plots, color='#546E7A')
+        # spans нужно передать в HoverSync для управления видимостью
+    """
+    
+    @staticmethod
+    def create_spans(plots, color='#546E7A', line_width=1, line_alpha=0.7):
+        """
+        Создаёт вертикальные Span на всех графиках.
+        
+        Args:
+            plots: список figure объектов
+            color: цвет линии crosshair
+            line_width: толщина линии
+            line_alpha: прозрачность
+            
+        Returns:
+            list of Span objects (по одному на каждый plot)
+        """
+        spans = []
+        for p in plots:
+            span = Span(
+                location=0,
+                dimension='height',
+                line_color=color,
+                line_width=line_width,
+                line_alpha=line_alpha,
+                line_dash='solid',
+                visible=False
+            )
+            p.add_layout(span)
+            spans.append(span)
+        return spans
+
+    @staticmethod
+    def create_hide_callback(spans):
+        """
+        Создаёт callback для скрытия crosshair при mouseleave.
+        
+        Args:
+            spans: список Span объектов
+            
+        Returns:
+            CustomJS callback
+        """
+        return CustomJS(args=dict(spans=spans), code="""
+            for (let span of spans) {
+                span.visible = false;
+            }
+        """)
+
+
+# ============================================================================
+# WORKAROUND #2, #4: AutoScaleY - Автомасштабирование Y при изменении X
+# Проблема: y_range не пересчитывается при pan/zoom по X
+# Решение: CustomJS callback на x_range.change
+# ============================================================================
+
+class AutoScaleY:
+    """
+    Автоматическое масштабирование Y-оси при изменении видимого X-диапазона.
+    
+    Использование:
+        callback = AutoScaleY.create_callback(
+            y_range=plot.y_range,
+            x_range=plot.x_range,
+            source=data_source,
+            y_fields=['high', 'low'],
+            padding=0.10
+        )
+        plot.x_range.js_on_change('start', callback)
+        plot.x_range.js_on_change('end', callback)
+    """
+    
+    @staticmethod
+    def create_callback(y_range, x_range, source, y_fields, padding=0.10):
+        """
+        Создаёт callback для автомасштабирования Y.
+        
+        Args:
+            y_range: Range1d объект для обновления (y_range или extra_y_ranges['name'])
+            x_range: Range1d объект X-оси (для фильтрации видимых данных)
+            source: ColumnDataSource с данными
+            y_fields: список полей для вычисления min/max (например ['high', 'low'])
+            padding: отступ от краёв (доля от диапазона)
+            
+        Returns:
+            CustomJS callback
+        """
+        fields_js = ', '.join([f"'{f}'" for f in y_fields])
+        
+        return CustomJS(args=dict(
+            y_range=y_range,
+            x_range=x_range,
+            src=source,
+            padding=padding
+        ), code=f"""
+            const data = src.data;
+            const timestamps = data.timestamp;
+            const fields = [{fields_js}];
+            
+            const x_start = x_range.start;
+            const x_end = x_range.end;
+            
+            let min_val = Infinity;
+            let max_val = -Infinity;
+            
+            for (let i = 0; i < timestamps.length; i++) {{
+                const t = timestamps[i];
+                if (t >= x_start && t <= x_end) {{
+                    for (let field of fields) {{
+                        const v = data[field][i];
+                        if (v < min_val) min_val = v;
+                        if (v > max_val) max_val = v;
+                    }}
+                }}
+            }}
+            
+            if (min_val !== Infinity && max_val !== -Infinity) {{
+                const pad = (max_val - min_val) * padding;
+                y_range.start = min_val - pad;
+                y_range.end = max_val + pad;
+            }}
+        """)
+
+    @staticmethod
+    def attach_to_plot(plot, source, y_fields, padding=0.10):
+        """
+        Удобный метод - создаёт и привязывает callback к plot.
+        
+        Args:
+            plot: figure объект
+            source: ColumnDataSource
+            y_fields: поля для min/max
+            padding: отступ
+        """
+        callback = AutoScaleY.create_callback(
+            plot.y_range, plot.x_range, source, y_fields, padding
+        )
+        plot.x_range.js_on_change('start', callback)
+        plot.x_range.js_on_change('end', callback)
+        return callback
+
+    @staticmethod
+    def attach_to_extra_y_range(plot, range_name, source, y_fields, padding=0.10):
+        """
+        Для дополнительных Y-осей (extra_y_ranges).
+        
+        Args:
+            plot: figure объект
+            range_name: имя в extra_y_ranges (например 'spot')
+            source: ColumnDataSource
+            y_fields: поля для min/max
+            padding: отступ
+        """
+        callback = AutoScaleY.create_callback(
+            plot.extra_y_ranges[range_name], plot.x_range, source, y_fields, padding
+        )
+        plot.x_range.js_on_change('start', callback)
+        plot.x_range.js_on_change('end', callback)
+        return callback
+
+
+# ============================================================================
+# WORKAROUND #6: StickyLabel - Метки привязанные к краю viewport
+# Проблема: Label не имеет режима sticky
+# Решение: CustomJS обновляет позицию Label при изменении x_range
+# ============================================================================
+
+class StickyLabel:
+    """
+    Создаёт Label который остаётся у края видимой области при pan/zoom.
+    
+    Использование:
+        label, callback = StickyLabel.create_right(
+            plot=plot,
+            y_value=100.50,
+            text="100.50",
+            color='#888888'
+        )
+    """
+    
+    @staticmethod
+    def create_right(plot, y_value, text, color='#888888', y_range_name=None):
+        """
+        Создаёт Label привязанный к правому краю.
+        
+        Args:
+            plot: figure объект
+            y_value: Y-координата
+            text: текст метки
+            color: цвет текста
+            y_range_name: имя Y-range (для extra_y_ranges) или None
+            
+        Returns:
+            tuple (Label, CustomJS callback)
+        """
+        label_kwargs = dict(
+            x=0,  # Будет обновлено callback
+            y=y_value,
+            text=text,
+            text_font_size='8pt',
+            text_color=color,
+            text_font_style='normal',
+            text_align='right',
+            x_offset=-5,
+            y_offset=2,
+        )
+        if y_range_name:
+            label_kwargs['y_range_name'] = y_range_name
+            
+        label = Label(**label_kwargs)
+        plot.add_layout(label)
+        
+        callback = CustomJS(args=dict(label=label, x_range=plot.x_range), code="""
+            label.x = x_range.end;
+        """)
+        plot.x_range.js_on_change('start', callback)
+        plot.x_range.js_on_change('end', callback)
+        
+        return label, callback
+
+    @staticmethod
+    def create_left(plot, y_value, text, color='#888888', y_range_name=None):
+        """
+        Создаёт Label привязанный к левому краю.
+        """
+        label_kwargs = dict(
+            x=0,
+            y=y_value,
+            text=text,
+            text_font_size='8pt',
+            text_color=color,
+            text_font_style='normal',
+            text_align='left',
+            x_offset=5,
+            y_offset=2,
+        )
+        if y_range_name:
+            label_kwargs['y_range_name'] = y_range_name
+            
+        label = Label(**label_kwargs)
+        plot.add_layout(label)
+        
+        callback = CustomJS(args=dict(label=label, x_range=plot.x_range), code="""
+            label.x = x_range.start;
+        """)
+        plot.x_range.js_on_change('start', callback)
+        plot.x_range.js_on_change('end', callback)
+        
+        return label, callback
+
+
+# ============================================================================
+# WORKAROUND #3, #5, #8: LayoutFixer - Исправление проблем с layout
+# Проблемы: visible=False не работает, spacing, min_border, sizing_mode
+# Решение: Комплекс настроек + height=0 для скрытия
+# ============================================================================
+
+class LayoutFixer:
+    """
+    Исправляет проблемы с layout в Bokeh.
+    """
+    
+    @staticmethod
+    def apply_zero_gaps(plot):
+        """
+        Убирает все отступы у графика для плотной стыковки.
+        """
+        plot.min_border_top = 0
+        plot.min_border_bottom = 0
+        plot.margin = 0
+        
+    @staticmethod
+    def configure_for_stack(plots, min_border_left=50, min_border_right=50):
+        """
+        Настраивает список графиков для вертикальной стыковки.
+        
+        Args:
+            plots: список figure объектов
+            min_border_left: одинаковый отступ слева (для выравнивания Y-осей)
+            min_border_right: одинаковый отступ справа
+        """
+        for p in plots:
+            p.min_border_left = min_border_left
+            p.min_border_right = min_border_right
+            p.min_border_top = 0
+            p.min_border_bottom = 0
+            p.margin = 0
+            
+    @staticmethod
+    def get_responsive_html_wrapper():
+        """
+        Возвращает CSS и JS для полноэкранного responsive layout.
+        """
+        return '''
+        <style>
+            html, body {
+                margin: 0;
+                padding: 0;
+                width: 100vw;
+                height: 100vh;
+                overflow: hidden;
+                background: #FFFFFF;
+            }
+            .bk-root {
+                height: 100vh !important;
+                width: 100vw !important;
+            }
+        </style>
+        '''
+
+
+# ============================================================================
+# WORKAROUND #9: SharedAxisPlot - Отдельный график для общей X-оси
+# Проблема: X-axis дублируется и не выравнивается между графиками
+# Решение: Скрыть X-axis на всех графиках, создать отдельный axis plot внизу
+# ============================================================================
+
+class SharedAxisPlot:
+    """
+    Создаёт отдельный минимальный график только для отображения X-оси.
+    
+    Использование:
+        axis_plot = SharedAxisPlot.create(
+            x_range=main_plot.x_range,
+            source=data_source,
+            height=25
+        )
+    """
+    
+    @staticmethod
+    def create(x_range, source, height=25, min_border_left=50, min_border_right=50):
+        """
+        Создаёт график-заглушку для X-оси.
+        
+        Args:
+            x_range: Range1d - общий X range (от основного графика)
+            source: ColumnDataSource - нужен для определения масштаба
+            height: высота в пикселях
+            min_border_left/right: отступы для выравнивания с другими графиками
+            
+        Returns:
+            figure объект
+        """
+        p = figure(
+            height=height,
+            sizing_mode='stretch_width',
+            x_axis_type='datetime',
+            x_range=x_range,
+            min_border_left=min_border_left,
+            min_border_right=min_border_right,
+            min_border_top=0,
+            min_border_bottom=25,
+            tools='',
+            toolbar_location=None,
+            outline_line_color=None,
+            background_fill_alpha=0,
+            border_fill_alpha=0
+        )
+        
+        # Невидимый рендерер для определения масштаба
+        p.line('timestamp', 'close', source=source, alpha=0, line_width=0)
+        
+        # Левая линия (продолжение оси Y основных графиков)
+        p.yaxis.visible = True
+        p.yaxis.axis_line_color = '#CCCCCC'
+        p.yaxis.major_tick_line_color = None
+        p.yaxis.minor_tick_line_color = None
+        p.yaxis.major_label_text_font_size = '0pt'
+        p.yaxis.major_label_text_color = None
+        
+        # Убираем сетку
+        p.xgrid.visible = False
+        p.ygrid.visible = False
+        
+        # Стилизация X-оси
+        p.xaxis.axis_line_color = '#CCCCCC'
+        p.xaxis.major_tick_line_color = '#CCCCCC'
+        p.xaxis.major_label_text_color = '#888888'
+        p.xaxis.major_label_text_font_size = '7pt'
+        p.xaxis.major_tick_in = 2
+        p.xaxis.major_tick_out = 2
+        
+        p.xaxis.formatter = DatetimeTickFormatter(
+            days='%d %b',
+            months='%b %Y'
+        )
+        
+        p.margin = 0
+        
+        return p
+
+
+# ============================================================================
+# WORKAROUND #11, #16: Candlestick - Свечной график из segment + vbar
+# Проблема: Bokeh не имеет встроенного candlestick
+# Решение: segment для теней + vbar для тел
+# ============================================================================
+
+class Candlestick:
+    """
+    Рендерит свечной график.
+    
+    Использование:
+        Candlestick.render(
+            plot=p,
+            source=src_ohlc,
+            candle_width=0.6
+        )
+    """
+    
+    # Ширина свечи = доля от дня в миллисекундах
+    DAY_MS = 24 * 60 * 60 * 1000
+    
+    @staticmethod
+    def render(plot, source, candle_width_ratio=0.6):
+        """
+        Рисует свечи на графике.
+        
+        Args:
+            plot: figure объект
+            source: ColumnDataSource с полями: timestamp, open, high, low, close, color
+            candle_width_ratio: ширина свечи как доля от дня (0.6 = 60%)
+        """
+        width = candle_width_ratio * Candlestick.DAY_MS
+        
+        # Тени (wicks)
+        plot.segment(
+            'timestamp', 'low', 'timestamp', 'high',
+            source=source, color='color', line_width=1
+        )
+        
+        # Тела (bodies)
+        plot.vbar(
+            'timestamp', width, 'close', 'open',
+            source=source, fill_color='color', line_color='color'
+        )
+
+
+# ============================================================================
+# WORKAROUND #10, #12: DynamicLegend - Обновляемая легенда через Div
+# Проблема: Legend не обновляется динамически при hover
+# Решение: Используем Div + CustomJS
+# ============================================================================
+
+class DynamicLegend:
+    """
+    Создаёт динамически обновляемую легенду.
+    """
+    
+    @staticmethod
+    def create_div(initial_html, style=None):
+        """
+        Создаёт Div для легенды.
+        
+        Args:
+            initial_html: начальный HTML контент
+            style: CSS стили (словарь) или None
+            
+        Returns:
+            Div объект
+        """
+        return Div(text=initial_html, sizing_mode='stretch_width')
+
+
+# ============================================================================
+# WORKAROUND #18: WindowResize - Обработка изменения размера окна
+# Проблема: Bokeh не поддерживает window resize event
+# Решение: JS addEventListener + trigger toggle callback
+# ============================================================================
+
+class WindowResize:
+    """
+    Добавляет поддержку window resize.
+    """
+    
+    @staticmethod
+    def get_init_script():
+        """
+        Возвращает JS код для инициализации resize handler.
+        Вставляется в HTML template.
+        """
+        return '''
+        <script>
+            (function() {
+                function triggerResize() {
+                    const doc = Bokeh.documents[0];
+                    if (!doc) return;
+                    const models = doc._all_models;
+                    for (const [id, model] of models) {
+                        if (model.type === 'Toggle') {
+                            model.properties.active.change.emit();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                
+                function init() {
+                    setTimeout(() => {
+                        if (!triggerResize()) setTimeout(init, 100);
+                    }, 200);
+                }
+                
+                window.addEventListener('resize', triggerResize);
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', init);
+                } else {
+                    init();
+                }
+            })();
+        </script>
+        '''
+
+
+# ============================================================================
+# WORKAROUND #19: SafeModelAccess - Безопасный доступ к моделям Bokeh
+# Проблема: Bokeh.documents[0].get_model_by_id() может вернуть null
+# Решение: Проверка + глобальная функция с защитой
+# ============================================================================
+
+class SafeModelAccess:
+    """
+    Безопасный доступ к Bokeh моделям из JavaScript.
+    """
+    
+    @staticmethod
+    def get_toggle_function_script():
+        """
+        Возвращает JS код с безопасной функцией toggle.
+        """
+        return '''
+        <script>
+            if (!window.toggleGreek) {
+                window.toggleGreek = function(id) {
+                    if (Bokeh.documents && Bokeh.documents.length > 0) {
+                        const toggle = Bokeh.documents[0].get_model_by_id(id);
+                        if (toggle) {
+                            toggle.active = !toggle.active;
+                        } else {
+                            console.error("Toggle not found:", id);
+                        }
+                    }
+                }
+            }
+        </script>
+        '''
+
+
+# ============================================================================
+# WORKAROUND #17: TickerFixer - Исправление проблем с тиками
+# Проблема: desired_num_ticks иногда игнорируется
+# Решение: Явная настройка BasicTicker
+# ============================================================================
+
+class TickerFixer:
+    """
+    Настройка тикеров осей.
+    """
+    
+    @staticmethod
+    def configure_sparse_ticks(axis, num_ticks=4):
+        """
+        Настраивает ось с меньшим количеством тиков.
+        
+        Args:
+            axis: объект оси (LinearAxis или из plot.yaxis[0])
+            num_ticks: желаемое количество тиков
+        """
+        axis.ticker = BasicTicker(desired_num_ticks=num_ticks)
+        axis.major_tick_in = 2
+        axis.major_tick_out = 2
+
+
+# ============================================================================
+# WORKAROUND #15: SmartBounds - Решение проблемы с bounds и zoom
+# Проблема: Zoom блокируется когда один край достиг bounds (#6708)
+# Решение: Добавляем padding к bounds больше чем к start/end
+# ============================================================================
+
+class SmartBounds:
+    """
+    Создаёт Range1d с корректными bounds.
+    """
+    
+    @staticmethod
+    def create_x_range(data_min, data_max, view_padding=0.02, bounds_padding=0.05):
+        """
+        Создаёт X range с умными bounds.
+        
+        Args:
+            data_min: минимальное значение данных
+            data_max: максимальное значение данных
+            view_padding: padding для начального view (доля)
+            bounds_padding: padding для bounds (должен быть > view_padding)
+            
+        Returns:
+            Range1d с корректными bounds
+        """
+        data_range = data_max - data_min
+        
+        view_pad = data_range * view_padding
+        bounds_pad = data_range * bounds_padding
+        
+        return Range1d(
+            start=data_min - view_pad,
+            end=data_max + view_pad,
+            bounds=(data_min - bounds_pad, data_max + bounds_pad)
+        )
+
+
+# ============================================================================
+# Утилиты для форматирования
+# ============================================================================
+
+class Formatters:
+    """
+    Форматирование значений для отображения.
+    """
+    
+    GREEK_FORMATS = {
+        'iv': lambda v: f'{v:.1f}%',
+        'theta': lambda v: f'${v:.2f}',
+        'delta': lambda v: f'{v:.4f}',
+        'gamma': lambda v: f'{v:.6f}',
+        'vega': lambda v: f'${v:.2f}',
+    }
+    
+    @staticmethod
+    def format_greek(key, value):
+        """Форматирует значение грека для отображения."""
+        formatter = Formatters.GREEK_FORMATS.get(key, lambda v: f'{v:.2f}')
+        return formatter(value)
+    
+    @staticmethod
+    def get_numeral_format(key):
+        """Возвращает формат для NumeralTickFormatter."""
+        formats = {
+            'iv': '0',
+            'theta': '0',
+            'delta': '0.00',
+            'gamma': '0.0000',
+            'vega': '0',
+        }
+        return formats.get(key, '0.00')
+Copy
+Это первый файл. Продолжаю со вторым?
+
+Сохранить в Notion
+да
+ФАЙЛ 2: bokeh_components.py
+Copy"""
+ФАЙЛ: bokeh_components.py
+ОПИСАНИЕ: Слой 2 - Переиспользуемые компоненты для всех графиков.
+          Единые стили, цвета, панели управления.
+
+ЗАВИСИМОСТИ: bokeh, bokeh_workarounds.py
+
+КОМПОНЕНТЫ:
+- ChartTheme: цвета и стили
+- GreekConfig: конфигурация греков
+- TogglePanel: панель с кнопками toggle
+- HeightCalculator: расчёт высот subplot'ов
+- ToggleCallbackBuilder: создание JS callback для toggle
+
+ТЕСТ: Этот файл не запускается отдельно - используется другими модулями.
+"""
+
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional, Any
+from bokeh.models import (
+    CustomJS, Div, Toggle, Range1d, LinearAxis, Span,
+    BasicTicker, NumeralTickFormatter, WheelZoomTool, PanTool, ResetTool
+)
+from bokeh.plotting import figure
+from bokeh.models.formatters import DatetimeTickFormatter
+
+
+# ============================================================================
+# ЦВЕТА И СТИЛИ - ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ
+# ============================================================================
+
+class ChartTheme:
+    """
+    Единая тема для всех графиков.
+    Все цвета и стили определены здесь.
+    """
+    
+    # Цвета свечей
+    CANDLE_UP = '#76D7C4'      # Зелёный (Call акцент)
+    CANDLE_DOWN = '#FF8787'    # Красный (Put акцент)
+    
+    # Цвета греков
+    GREEKS = {
+        'iv': '#9B59B6',       # Purple
+        'theta': '#E67E22',    # Orange
+        'delta': '#3498DB',    # Blue
+        'gamma': '#F1C40F',    # Yellow
+        'vega': '#1ABC9C',     # Cyan
+    }
+    
+    # Цвета UI
+    SPOT = '#969696'           # Gray для спота
+    BG = '#FFFFFF'             # Белый фон
+    TEXT = '#333333'           # Основной текст
+    TEXT_SECONDARY = '#888888' # Вторичный текст
+    GRID = '#C8C8C8'           # Сетка
+    AXIS = '#CCCCCC'           # Оси
+    CROSSHAIR = '#546E7A'      # Crosshair
+    
+    # Прозрачность
+    GRID_ALPHA = 0.15
+    CROSSHAIR_ALPHA = 0.7
+    AREA_FILL_ALPHA = 0.2
+    
+    # Стиль панели управления (единый для всех графиков)
+    PANEL_STYLE = """
+        font-family: 'SF Mono', Monaco, monospace;
+        font-size: 11px;
+        padding: 6px 15px;
+        background: linear-gradient(90deg, rgba(255,255,255,0.98), rgba(248,249,250,0.98));
+        border-radius: 6px;
+        border: 1px solid #e0e0e0;
+        display: inline-flex;
+        gap: 15px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        align-items: center;
+        height: 36px;
+        box-sizing: border-box;
+    """
+    
+    # Стиль кнопки toggle
+    BUTTON_STYLE_TEMPLATE = """
+        padding: 0 8px;
+        height: 22px;
+        border-radius: 3px;
+        font-size: 10px;
+        border: 1px solid {border_color};
+        color: {text_color};
+        background-color: rgba(255,255,255,0.8);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        transition: all 0.2s;
+        outline: none;
+        line-height: 1;
+    """
+    
+    @classmethod
+    def get_greek_color(cls, key: str) -> str:
+        """Возвращает цвет для грека."""
+        return cls.GREEKS.get(key, cls.TEXT)
+    
+    @classmethod
+    def get_button_style(cls, color: str, active: bool) -> str:
+        """Возвращает CSS стиль для кнопки."""
+        if active:
+            return cls.BUTTON_STYLE_TEMPLATE.format(
+                border_color=color,
+                text_color=color
+            )
+        else:
+            return cls.BUTTON_STYLE_TEMPLATE.format(
+                border_color='#ced4da',
+                text_color='#7F8C8D'
+            )
+
+
+# ============================================================================
+# КОНФИГУРАЦИЯ ГРЕКОВ
+# ============================================================================
+
+class GreekConfig:
+    """
+    Конфигурация для греков - названия, символы, форматы.
+    """
+    
+    # Порядок греков (важен для layout!)
+    KEYS = ['iv', 'theta', 'delta', 'gamma', 'vega']
+    
+    # Метки для осей
+    LABELS = {
+        'iv': 'IV (%)',
+        'theta': 'Theta ($)',
+        'delta': 'Delta',
+        'gamma': 'Gamma',
+        'vega': 'Vega ($)',
+    }
+    
+    # Символы для кнопок и легенды
+    SYMBOLS = {
+        'iv': 'IV',
+        'theta': 'Θ',
+        'delta': 'Δ',
+        'gamma': 'Γ',
+        'vega': 'ν',
+    }
+    
+    # Форматы для NumeralTickFormatter
+    TICK_FORMATS = {
+        'iv': '0',
+        'theta': '0',
+        'delta': '0.00',
+        'gamma': '0.0000',
+        'vega': '0',
+    }
+    
+    # Форматы для отображения значений
+    VALUE_FORMATS = {
+        'iv': '{:.2f}%',
+        'theta': '${:.2f}',
+        'delta': '{:.4f}',
+        'gamma': '{:.6f}',
+        'vega': '${:.2f}',
+    }
+    
+    @classmethod
+    def format_value(cls, key: str, value: float) -> str:
+        """Форматирует значение грека."""
+        fmt = cls.VALUE_FORMATS.get(key, '{:.2f}')
+        return fmt.format(value)
+    
+    @classmethod
+    def get_label(cls, key: str) -> str:
+        """Возвращает метку для оси."""
+        return cls.LABELS.get(key, key.upper())
+    
+    @classmethod
+    def get_symbol(cls, key: str) -> str:
+        """Возвращает символ грека."""
+        return cls.SYMBOLS.get(key, key.upper())
+
+
+# ============================================================================
+# КОНФИГУРАЦИЯ ГРАФИКА
+# ============================================================================
+
+@dataclass(frozen=True)
+class ChartConfig:
+    """Конфигурация размеров и отступов графика."""
+    
+    # Отступы для выравнивания осей
+    min_border_left: int = 50
+    min_border_right: int = 50
+    
+    # Высота области X-оси
+    xaxis_height: int = 25
+    
+    # Общая высота по умолчанию
+    default_total_height: int = 700
+    
+    # Ширина свечи (доля от дня)
+    candle_width_ratio: float = 0.6
+    
+    # Padding для Y-range
+    ohlc_y_padding: float = 0.12
+    spot_y_padding: float = 0.08
+    greek_y_padding: float = 0.15
+    autoscale_padding: float = 0.10
+
+
+# Глобальная конфигурация
+CONFIG = ChartConfig()
+
+
+# ============================================================================
+# КАЛЬКУЛЯТОР ВЫСОТ
+# ============================================================================
+
+class HeightCalculator:
+    """
+    Расчёт высот графиков по формуле из спецификации.
+    
+    Формула:
+    - 1 грек: Main 75%, Greeks 25%
+    - 2 грека: Main 62.5%, Greeks 37.5% (каждый ~18.75%)
+    - Каждый следующий грек = половина предыдущего прироста
+    """
+    
+    @staticmethod
+    def calculate(n_greeks: int, total_height: int = 700) -> Tuple[int, int]:
+        """
+        Рассчитывает высоты main и greek графиков.
+        
+        Args:
+            n_greeks: количество активных греков (0-5)
+            total_height: общая доступная высота
+            
+        Returns:
+            tuple (main_height, greek_height)
+            greek_height - высота ОДНОГО грека (все одинаковые)
+        """
+        if n_greeks == 0:
+            return total_height, 0
+        
+        # Доля для греков: 0.25 + 0.125 + 0.0625 + ...
+        greek_area = sum(0.25 / (2**i) for i in range(n_greeks))
+        
+        main_h = int(total_height * (1 - greek_area))
+        greek_h = int(total_height * greek_area / n_greeks) if n_greeks > 0 else 0
+        
+        return main_h, greek_h
+    
+    @staticmethod
+    def get_js_code() -> str:
+        """
+        Возвращает JavaScript код для расчёта высот.
+        Используется в toggle callback.
+        """
+        return """
+        // Расчёт высот по формуле
+        let greekArea = 0;
+        for (let i = 0; i < activeCount; i++) {
+            greekArea += 0.25 / Math.pow(2, i);
+        }
+        
+        let mainHeight, greekHeight;
+        
+        if (activeCount === 0) {
+            mainHeight = TOTAL_HEIGHT;
+            greekHeight = 0;
+        } else {
+            mainHeight = Math.round(TOTAL_HEIGHT * (1 - greekArea));
+            const totalGreekHeight = TOTAL_HEIGHT - mainHeight;
+            greekHeight = Math.round(totalGreekHeight / activeCount);
+        }
+        """
+
+
+# ============================================================================
+# ПАНЕЛЬ TOGGLE КНОПОК
+# ============================================================================
+
+class TogglePanel:
+    """
+    Создаёт панель с toggle кнопками для греков.
+    Единый стиль для всех графиков.
+    """
+    
+    @staticmethod
+    def create_toggles() -> List[Toggle]:
+        """
+        Создаёт список Bokeh Toggle виджетов.
+        
+        Returns:
+            list of Toggle (5 штук: IV, Theta, Delta, Gamma, Vega)
+        """
+        toggles = []
+        for key in GreekConfig.KEYS:
+            t = Toggle(
+                label=f'{GreekConfig.SYMBOLS[key]} {key.upper()}',
+                active=True,
+                button_type='success',
+                width=85,
+                height=32,
+            )
+            toggles.append(t)
+        return toggles
+    
+    @staticmethod
+    def create_html_controls(toggles: List[Toggle]) -> Div:
+        """
+        Создаёт Div с HTML кнопками (красивый стиль).
+        
+        Args:
+            toggles: список Bokeh Toggle объектов (для привязки по id)
+            
+        Returns:
+            Div с HTML контентом
+        """
+        controls_div = Div(text="", height=40)
+        
+        # Генерируем начальный HTML
+        html = f'<div style="{ChartTheme.PANEL_STYLE}">'
+        
+        for i, key in enumerate(GreekConfig.KEYS):
+            t = toggles[i]
+            color = ChartTheme.get_greek_color(key)
+            symbol = GreekConfig.get_symbol(key)
+            
+            # Начальное состояние - active=True
+            btn_style = ChartTheme.get_button_style(color, active=True)
+            onclick = f"window.toggleGreek('{t.id}')"
+            
+            html += f'''
+            <button type="button" style="{btn_style}" onclick="{onclick}">
+                <span style="font-size: 9px; opacity: 0.9; font-weight: 700;">{symbol} {key.upper()}</span>
+            </button>
+            '''
+        
+        html += '</div>'
+        
+        # Добавляем скрипт для глобальной функции toggle
+        html += """
+        <script>
+            if (!window.toggleGreek) {
+                window.toggleGreek = function(id) {
+                    if (Bokeh.documents && Bokeh.documents.length > 0) {
+                        const toggle = Bokeh.documents[0].get_model_by_id(id);
+                        if (toggle) toggle.active = !toggle.active;
+                    }
+                }
+            }
+        </script>
+        """
+        
+        controls_div.text = html
+        return controls_div
+    
+    @staticmethod
+    def create_update_callback(controls_div: Div, toggles: List[Toggle]) -> CustomJS:
+        """
+        Создаёт callback для обновления HTML кнопок при изменении toggle state.
+        
+        Args:
+            controls_div: Div с кнопками
+            toggles: список Toggle объектов
+            
+        Returns:
+            CustomJS callback
+        """
+        return CustomJS(
+            args=dict(
+                toggles=toggles,
+                div=controls_div,
+                colors=ChartTheme.GREEKS,
+                symbols=GreekConfig.SYMBOLS,
+                panel_style=ChartTheme.PANEL_STYLE
+            ),
+            code="""
+            const keys = ['iv', 'theta', 'delta', 'gamma', 'vega'];
+            
+            let html = `<div style="${panel_style}">`;
+            
+            for (let i = 0; i < toggles.length; i++) {
+                const t = toggles[i];
+                const key = keys[i];
+                const color = colors[key];
+                const active = t.active;
+                
+                const border = active ? `1px solid ${color}` : "1px solid #ced4da";
+                const textColor = active ? color : "#7F8C8D";
+                
+                const btnStyle = `
+                    padding: 0 8px;
+                    height: 22px;
+                    border-radius: 3px;
+                    font-size: 10px;
+                    border: ${border};
+                    color: ${textColor};
+                    background-color: rgba(255,255,255,0.8);
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    transition: all 0.2s;
+                    outline: none;
+                    line-height: 1;
+                `;
+                
+                const onclick = `window.toggleGreek('${t.id}')`;
+                const sym = symbols[key];
+                
+                html += `
+                <button type="button" style="${btnStyle}" onclick="${onclick}">
+                    <span style="font-size: 9px; opacity: 0.9; font-weight: 700;">${sym} ${key.toUpperCase()}</span>
+                </button>
+                `;
+            }
+            html += '</div>';
+            div.text = html;
+            """
+        )
+
+
+# ============================================================================
+# СОЗДАНИЕ TOGGLE CALLBACK (ЛОГИКА ВЫСОТ)
+# ============================================================================
+
+class ToggleCallbackBuilder:
+    """
+    Создаёт JavaScript callback для toggle кнопок.
+    Управляет высотами графиков и видимостью.
+    
+    ЭТО КРИТИЧЕСКАЯ ЧАСТЬ - логика высот 1 в 1 из оригинала!
+    """
+    
+    @staticmethod
+    def build(
+        toggles: List[Toggle],
+        greek_plots: List[Any],
+        main_plot: Any,
+        legend_div: Div,
+        src_ohlc: Any,
+        src_spot: Any,
+        src_greeks: Dict[str, Any],
+        fixed_overhead: int = 155
+    ) -> List[CustomJS]:
+        """
+        Создаёт callbacks для всех toggle кнопок.
+        
+        Args:
+            toggles: список Toggle объектов
+            greek_plots: список figure объектов для греков
+            main_plot: основной figure (свечи)
+            legend_div: Div с легендой
+            src_ohlc: ColumnDataSource для OHLC
+            src_spot: ColumnDataSource для спота
+            src_greeks: dict с ColumnDataSource для каждого грека
+            fixed_overhead: фиксированная высота header + controls
+            
+        Returns:
+            list of CustomJS callbacks (по одному на каждый toggle)
+        """
+        
+        args = dict(
+            toggles=toggles,
+            greek_plots=greek_plots,
+            main_plot=main_plot,
+            legend_div=legend_div,
+            src_ohlc=src_ohlc,
+            src_spot=src_spot,
+            src_iv=src_greeks['iv'],
+            src_theta=src_greeks['theta'],
+            src_delta=src_greeks['delta'],
+            src_gamma=src_greeks['gamma'],
+            src_vega=src_greeks['vega'],
+            colors=ChartTheme.GREEKS,
+            panel_style=ChartTheme.PANEL_STYLE
+        )
+        
+        js_code = f"""
+            // Расчёт доступной высоты
+            const overhead = {fixed_overhead};
+            const TOTAL_HEIGHT = Math.max(window.innerHeight - overhead, 400);
+            
+            // Подсчёт активных греков
+            let activeCount = 0;
+            const activeIndices = [];
+            for (let i = 0; i < toggles.length; i++) {{
+                if (toggles[i].active) {{
+                    activeCount++;
+                    activeIndices.push(i);
+                }}
+            }}
+            
+            // Расчёт высот по формуле
+            let greekArea = 0;
+            for (let i = 0; i < activeCount; i++) {{
+                greekArea += 0.25 / Math.pow(2, i);
+            }}
+            
+            const CONTENT_HEIGHT = TOTAL_HEIGHT;
+            let mainHeight, greekHeight;
+            
+            if (activeCount === 0) {{
+                mainHeight = TOTAL_HEIGHT;
+                greekHeight = 0;
+            }} else {{
+                mainHeight = Math.round(CONTENT_HEIGHT * (1 - greekArea));
+                const totalGreekHeight = CONTENT_HEIGHT - mainHeight;
+                greekHeight = Math.round(totalGreekHeight / activeCount);
+            }}
+            
+            // Вспомогательная функция для правой Y оси
+            function setRightYAxisVisible(plot, show) {{
+                if (plot.right && plot.right.length > 0) {{
+                    const axis = plot.right[0];
+                    const alpha = show ? 1.0 : 0.0;
+                    axis.visible = show;
+                    axis.axis_line_alpha = alpha;
+                    axis.major_tick_line_alpha = alpha;
+                    axis.minor_tick_line_alpha = alpha;
+                    axis.major_label_text_alpha = alpha;
+                    axis.axis_label_text_alpha = alpha;
+                }}
+            }}
+            
+            // Применяем высоту к main plot
+            main_plot.height = mainHeight;
+            main_plot.min_border_bottom = 0;
+            
+            // Применяем высоты к greek plots
+            for (let i = 0; i < greek_plots.length; i++) {{
+                const isActive = toggles[i].active;
+                
+                if (isActive) {{
+                    greek_plots[i].visible = true;
+                    greek_plots[i].height = greekHeight;
+                    greek_plots[i].min_border_bottom = 0;
+                    greek_plots[i].min_border_top = 0;
+                    greek_plots[i].min_border_right = 50;
+                    setRightYAxisVisible(greek_plots[i], true);
+                }} else {{
+                    greek_plots[i].visible = false;
+                    greek_plots[i].height = 0;
+                    greek_plots[i].min_border_bottom = 0;
+                    greek_plots[i].min_border_top = 0;
+                    greek_plots[i].min_border_right = 0;
+                    setRightYAxisVisible(greek_plots[i], false);
+                }}
+            }}
+            
+            // Обновление легенды (из последней позиции мыши)
+            if (legend_div.tags && legend_div.tags.length > 0) {{
+                const x = legend_div.tags[0];
+                
+                // Поиск ближайшей точки данных
+                const timestamps = src_ohlc.data.timestamp;
+                let minDist = Infinity;
+                let idx = 0;
+                for (let i = 0; i < timestamps.length; i++) {{
+                    const dist = Math.abs(timestamps[i] - x);
+                    if (dist < minDist) {{
+                        minDist = dist;
+                        idx = i;
+                    }}
+                }}
+                
+                // Получение значений
+                const o = src_ohlc.data.open[idx].toFixed(2);
+                const h = src_ohlc.data.high[idx].toFixed(2);
+                const l = src_ohlc.data.low[idx].toFixed(2);
+                const c = src_ohlc.data.close[idx].toFixed(2);
+                const spot = src_spot.data.value[idx].toFixed(0);
+                
+                const iv = src_iv.data.value[idx].toFixed(2);
+                const theta = src_theta.data.value[idx].toFixed(2);
+                const delta = src_delta.data.value[idx].toFixed(4);
+                const gamma = src_gamma.data.value[idx].toFixed(6);
+                const vega = src_vega.data.value[idx].toFixed(2);
+                
+                // Проверка состояния toggles
+                const showIV = toggles[0].active ? 'inline' : 'none';
+                const showTheta = toggles[1].active ? 'inline' : 'none';
+                const showDelta = toggles[2].active ? 'inline' : 'none';
+                const showGamma = toggles[3].active ? 'inline' : 'none';
+                const showVega = toggles[4].active ? 'inline' : 'none';
+                
+                // Форматирование даты
+                const dateObj = new Date(timestamps[idx]);
+                const dateStr = dateObj.toLocaleDateString('en-US', {{ 
+                    day: '2-digit', 
+                    month: 'short', 
+                    year: 'numeric' 
+                }});
+                
+                // Обновление HTML легенды
+                legend_div.text = `
+                    <div style="${{panel_style}}">
+                        <span style="color:#666; font-weight: 500;">${{dateStr}}</span>
+                        <span style="color:${{colors.iv}}; font-weight: 600;">O:${{o}} H:${{h}} L:${{l}} C:${{c}}</span>
+                        <span style="color:#969696;">Spot: $${{spot}}</span>
+                        
+                        <span style="color:${{colors.iv}}; display:${{showIV}};">IV:${{iv}}%</span>
+                        <span style="color:${{colors.theta}}; display:${{showTheta}};">Θ:$${{theta}}</span>
+                        <span style="color:${{colors.delta}}; display:${{showDelta}};">Δ:${{delta}}</span>
+                        <span style="color:${{colors.gamma}}; display:${{showGamma}};">Γ:${{gamma}}</span>
+                        <span style="color:${{colors.vega}}; display:${{showVega}};">ν:$${{vega}}</span>
+                    </div>
+                `;
+            }}
+        """
+        
+        callbacks = []
+        for toggle in toggles:
+            callback = CustomJS(args=args, code=js_code)
+            callbacks.append(callback)
+        
+        return callbacks
+
+
+# ============================================================================
+# HOVER SYNC CALLBACK (ЛЕГЕНДА + CROSSHAIR)
+# ============================================================================
+
+class HoverSyncBuilder:
+    """
+    Создаёт callback для синхронизации hover (легенда + crosshair).
+    """
+    
+    @staticmethod
+    def build(
+        legend_div: Div,
+        src_ohlc: Any,
+        src_spot: Any,
+        src_greeks: Dict[str, Any],
+        all_spans: List[Span],
+        toggles: List[Toggle]
+    ) -> CustomJS:
+        """
+        Создаёт callback для обновления легенды и crosshair при hover.
+        
+        Args:
+            legend_div: Div для легенды
+            src_ohlc: ColumnDataSource для OHLC
+            src_spot: ColumnDataSource для спота
+            src_greeks: dict с ColumnDataSource для греков
+            all_spans: список Span для crosshair
+            toggles: список Toggle для проверки активности
+            
+        Returns:
+            CustomJS callback
+        """
+        return CustomJS(
+            args=dict(
+                legend_div=legend_div,
+                src_ohlc=src_ohlc,
+                src_spot=src_spot,
+                src_iv=src_greeks['iv'],
+                src_theta=src_greeks['theta'],
+                src_delta=src_greeks['delta'],
+                src_gamma=src_greeks['gamma'],
+                src_vega=src_greeks['vega'],
+                spans=all_spans,
+                toggles=toggles,
+                colors=ChartTheme.GREEKS,
+                panel_style=ChartTheme.PANEL_STYLE
+            ),
+            code="""
+                const geometry = cb_data.geometry;
+                const x = geometry.x;
+                
+                // Сохраняем координаты для обновления при toggle
+                legend_div.tags = [x];
+                
+                // Синхронизация crosshair spans
+                for (let i = 0; i < spans.length; i++) {
+                    const span = spans[i];
+                    span.location = x;
+                    
+                    // Main span (0) всегда видим
+                    // Greek spans (1..5) зависят от toggles
+                    // Axis span (последний) всегда видим
+                    if (i === 0) {
+                        span.visible = true;
+                    } else if (i > 0 && i <= toggles.length) {
+                        const toggleIdx = i - 1;
+                        span.visible = toggles[toggleIdx].active;
+                    }
+                }
+                
+                // Поиск ближайшей точки данных
+                const timestamps = src_ohlc.data.timestamp;
+                let minDist = Infinity;
+                let idx = 0;
+                
+                for (let i = 0; i < timestamps.length; i++) {
+                    const dist = Math.abs(timestamps[i] - x);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        idx = i;
+                    }
+                }
+                
+                // Получение значений
+                const o = src_ohlc.data.open[idx].toFixed(2);
+                const h = src_ohlc.data.high[idx].toFixed(2);
+                const l = src_ohlc.data.low[idx].toFixed(2);
+                const c = src_ohlc.data.close[idx].toFixed(2);
+                const spot = src_spot.data.value[idx].toFixed(0);
+                
+                const iv = src_iv.data.value[idx].toFixed(2);
+                const theta = src_theta.data.value[idx].toFixed(2);
+                const delta = src_delta.data.value[idx].toFixed(4);
+                const gamma = src_gamma.data.value[idx].toFixed(6);
+                const vega = src_vega.data.value[idx].toFixed(2);
+                
+                // Проверка видимости греков
+                const showIV = toggles[0].active ? 'inline' : 'none';
+                const showTheta = toggles[1].active ? 'inline' : 'none';
+                const showDelta = toggles[2].active ? 'inline' : 'none';
+                const showGamma = toggles[3].active ? 'inline' : 'none';
+                const showVega = toggles[4].active ? 'inline' : 'none';
+                
+                // Форматирование даты
+                const dateObj = new Date(timestamps[idx]);
+                const dateStr = dateObj.toLocaleDateString('en-US', { 
+                    day: '2-digit', 
+                    month: 'short', 
+                    year: 'numeric' 
+                });
+                
+                // Обновление легенды
+                legend_div.text = `
+                    <div style="${panel_style}">
+                        <span style="color:#666; font-weight: 500;">${dateStr}</span>
+                        <span style="color:${colors.iv}; font-weight: 600;">O:${o} H:${h} L:${l} C:${c}</span>
+                        <span style="color:#969696;">Spot: $${spot}</span>
+                        
+                        <span id="legend-iv-val" style="color:${colors.iv}; display:${showIV};">IV:${iv}%</span>
+                        <span id="legend-theta-val" style="color:${colors.theta}; display:${showTheta};">Θ:$${theta}</span>
+                        <span id="legend-delta-val" style="color:${colors.delta}; display:${showDelta};">Δ:${delta}</span>
+                        <span id="legend-gamma-val" style="color:${colors.gamma}; display:${showGamma};">Γ:${gamma}</span>
+                        <span id="legend-vega-val" style="color:${colors.vega}; display:${showVega};">ν:$${vega}</span>
+                    </div>
+                `;
+            """
+        )
+
+
+# ============================================================================
+# ФАБРИКА ГРАФИКОВ (БАЗОВЫЕ НАСТРОЙКИ)
+# ============================================================================
+
+class PlotFactory:
+    """
+    Создаёт предварительно настроенные figure объекты.
+    """
+    
+    @staticmethod
+    def create_main_figure(height: int, x_range: Range1d = None) -> figure:
+        """
+        Создаёт основной figure для свечей.
+        
+        Args:
+            height: высота в пикселях
+            x_range: Range1d или None
+            
+        Returns:
+            figure объект
+        """
+        kwargs = dict(
+            x_axis_type='datetime',
+            height=height,
+            tools='',
+            background_fill_color=ChartTheme.BG,
+            min_border_left=CONFIG.min_border_left,
+            min_border_right=CONFIG.min_border_right,
+            min_border_top=10,
+            min_border_bottom=5,
+            title=None,
+            sizing_mode='stretch_width',
+        )
+        
+        if x_range is not None:
+            kwargs['x_range'] = x_range
+        
+        p = figure(**kwargs)
+        
+        # Инструменты
+        wheel_zoom = WheelZoomTool(maintain_focus=False)
+        pan = PanTool()
+        reset = ResetTool()
+        p.add_tools(wheel_zoom, pan, reset)
+        p.toolbar.active_scroll = wheel_zoom
+        
+        # Стилизация
+        p.grid.grid_line_alpha = ChartTheme.GRID_ALPHA
+        p.outline_line_color = None
+        p.toolbar_location = None
+        
+        # Серые оси
+        p.xaxis.axis_line_color = ChartTheme.AXIS
+        p.yaxis.axis_line_color = ChartTheme.AXIS
+        p.xaxis.major_tick_line_color = ChartTheme.AXIS
+        p.yaxis.major_tick_line_color = ChartTheme.AXIS
+        p.xaxis.minor_tick_line_color = ChartTheme.AXIS
+        p.yaxis.minor_tick_line_color = ChartTheme.AXIS
+        
+        # X-axis скрыта (будет отдельный axis plot)
+        p.xaxis.visible = False
+        p.xaxis.formatter = DatetimeTickFormatter(
+            days='%d %b',
+            months='%b %Y'
+        )
+        
+        return p
+    
+    @staticmethod
+    def create_greek_figure(
+        key: str,
+        x_range: Range1d,
+        y_range: Range1d,
+        height: int
+    ) -> figure:
+        """
+        Создаёт figure для грека.
+        
+        Args:
+            key: ключ грека (iv, theta, delta, gamma, vega)
+            x_range: общий X range
+            y_range: Y range для данного грека
+            height: высота в пикселях
+            
+        Returns:
+            figure объект
+        """
+        p = figure(
+            x_axis_type='datetime',
+            x_range=x_range,
+            y_range=y_range,
+            height=height,
+            tools='',
+            background_fill_color=ChartTheme.BG,
+            min_border_left=CONFIG.min_border_left,
+            min_border_right=CONFIG.min_border_right,
+            min_border_top=3,
+            min_border_bottom=3,
+            title=None,
+            sizing_mode='stretch_width',
+        )
+        
+        # Инструменты
+        wheel_zoom = WheelZoomTool(maintain_focus=False)
+        pan = PanTool()
+        p.add_tools(wheel_zoom, pan)
+        p.toolbar.active_scroll = wheel_zoom
+        
+        # Стилизация
+        p.grid.grid_line_alpha = ChartTheme.GRID_ALPHA
+        p.outline_line_color = None
+        p.toolbar_location = None
+        
+        # Левая ось - только линия для визуального "квадрата"
+        p.yaxis.visible = True
+        p.yaxis.axis_line_color = ChartTheme.AXIS
+        p.yaxis.major_tick_line_color = None
+        p.yaxis.minor_tick_line_color = None
+        p.yaxis.major_label_text_font_size = '0pt'
+        p.yaxis.major_label_text_color = None
+        p.yaxis.axis_label = None
+        
+        # Правая ось с метками
+        color = ChartTheme.get_greek_color(key)
+        label = GreekConfig.get_label(key)
+        
+        right_axis = LinearAxis(
+            axis_label=label,
+            axis_label_text_color=ChartTheme.TEXT_SECONDARY,
+            axis_label_text_font_style='bold',
+            axis_label_text_font_size='8pt',
+            major_label_text_color=ChartTheme.TEXT_SECONDARY,
+            major_label_text_font_size='7pt',
+            axis_line_color=ChartTheme.AXIS,
+            major_tick_line_color=ChartTheme.AXIS,
+            minor_tick_line_color=ChartTheme.AXIS,
+        )
+        
+        # Настройка тиков
+        right_axis.major_tick_in = 2
+        right_axis.major_tick_out = 2
+        right_axis.ticker = BasicTicker(desired_num_ticks=3)
+        
+        # Формат чисел
+        tick_format = GreekConfig.TICK_FORMATS.get(key, '0.00')
+        right_axis.formatter = NumeralTickFormatter(format=tick_format)
+        
+        p.add_layout(right_axis, 'right')
+        
+        # X-axis скрыта
+        p.xaxis.visible = False
+        p.xaxis.axis_line_color = ChartTheme.AXIS
+        p.xaxis.major_tick_line_color = ChartTheme.AXIS
+        p.xaxis.minor_tick_line_color = ChartTheme.AXIS
+        
+        return p
+Copy
+Продолжаю с третьим файлом - strike_chart.py?
+
+Сохранить в Notion
+да
+ФАЙЛ 3: strike_chart.py
+Copy"""
+ФАЙЛ: strike_chart.py
+ОПИСАНИЕ: Strike Chart - свечной график опциона с греками.
+          Полная реализация с toggle кнопками, crosshair sync, auto-scale Y.
+
+ЗАВИСИМОСТИ: 
+    - bokeh_workarounds.py (должен быть в той же папке)
+    - bokeh_components.py (должен быть в той же папке)
+
+ТЕСТ: python strike_chart.py → откроется браузер с тестовым графиком
+
+ЧЕКЛИСТ ПРОВЕРКИ:
+[ ] Toggle кнопки IV/Theta/Delta/Gamma/Vega работают
+[ ] При отключении грека - высоты пересчитываются  
+[ ] Crosshair синхронизирован на всех графиках
+[ ] Y-axis автомасштабируется при zoom X
+[ ] Свечи правильного цвета (зелёные вверх, красные вниз)
+[ ] Легенда обновляется при наведении
+[ ] Price lines отображаются на всех графиках
+[ ] Ось X только внизу (общая для всех)
+"""
+
+import pandas as pd
+import numpy as np
+from datetime import datetime
+import time
+from typing import Dict, List, Tuple, Optional, Any
+
+from bokeh.plotting import figure
+from bokeh.models import (
+    ColumnDataSource, HoverTool, Span, Range1d, LinearAxis, 
+    Label, Div, BasicTicker, NumeralTickFormatter
+)
+from bokeh.layouts import column, row, Spacer
+from bokeh.embed import file_html
+from bokeh.resources import CDN
+
+# Импорт наших модулей
+from bokeh_workarounds import (
+    CrosshairSync, AutoScaleY, StickyLabel, LayoutFixer,
+    SharedAxisPlot, Candlestick, SmartBounds, WindowResize, SafeModelAccess
+)
+from bokeh_components import (
+    ChartTheme, GreekConfig, ChartConfig, CONFIG,
+    HeightCalculator, TogglePanel, ToggleCallbackBuilder,
+    HoverSyncBuilder, PlotFactory
+)
+
+
+# ============================================================================
+# ГЕНЕРАЦИЯ ТЕСТОВЫХ ДАННЫХ
+# ============================================================================
+
+def generate_test_data(n_points: int = 200):
+    """
+    Генерирует синтетические данные для тестирования.
+    
+    Returns:
+        df_ohlc: DataFrame с OHLC данными опциона
+        df_spot: DataFrame с ценой базового актива
+        df_greeks: Dict[str, DataFrame] с греками
+    """
+    np.random.seed(42)
+    
+    dates = pd.date_range(start='2024-01-01', periods=n_points, freq='D')
+    
+    # Spot (BTC) - базовый актив
+    spot = 50000 + np.cumsum(np.random.normal(100, 400, n_points))
+    
+    # IV 30-100% - волатильность
+    iv = np.clip(60 + np.cumsum(np.random.normal(0, 1.2, n_points)), 30, 100)
+    
+    # Option OHLC - цены опциона
+    strike = 55000
+    intrinsic = np.maximum(spot - strike, 0)
+    time_decay = 1 - np.arange(n_points) / n_points
+    base_price = intrinsic * 0.2 + iv * 10 * time_decay + 100
+    
+    opens, highs, lows, closes = [], [], [], []
+    prev = base_price[0]
+    for i in range(n_points):
+        c = base_price[i] + np.random.normal(0, 15)
+        h = max(prev, c) + abs(np.random.normal(0, 12))
+        l = min(prev, c) - abs(np.random.normal(0, 12))
+        opens.append(prev)
+        highs.append(h)
+        lows.append(l)
+        closes.append(c)
+        prev = c
+    
+    # DataFrames
+    df_ohlc = pd.DataFrame({
+        'timestamp': dates,
+        'open': opens,
+        'high': highs,
+        'low': lows,
+        'close': closes,
+    })
+    
+    df_spot = pd.DataFrame({
+        'timestamp': dates,
+        'value': spot.tolist(),
+    })
+    
+    # Греки
+    theta_vals = -25 - iv/8 + np.random.normal(0, 3, n_points)
+    delta_vals = np.clip(0.4 + 0.15*np.sin(np.arange(n_points)/10) + 0.05*np.random.randn(n_points), 0, 1)
+    gamma_vals = 0.001 + 0.0003*np.cos(np.arange(n_points)/15) + 0.00005*np.random.randn(n_points)
+    vega_vals = 80 + 25*np.sin(np.arange(n_points)/20) + 5*np.random.randn(n_points)
+    
+    df_greeks = {
+        'iv': pd.DataFrame({'timestamp': dates, 'value': iv.tolist()}),
+        'theta': pd.DataFrame({'timestamp': dates, 'value': theta_vals.tolist()}),
+        'delta': pd.DataFrame({'timestamp': dates, 'value': delta_vals.tolist()}),
+        'gamma': pd.DataFrame({'timestamp': dates, 'value': gamma_vals.tolist()}),
+        'vega': pd.DataFrame({'timestamp': dates, 'value': vega_vals.tolist()}),
+    }
+    
+    return df_ohlc, df_spot, df_greeks
+
+
+# ============================================================================
+# КОНВЕРТАЦИЯ ДАННЫХ В COLUMNDATASOURCE
+# ============================================================================
+
+def dataframes_to_sources(
+    df_ohlc: pd.DataFrame,
+    df_spot: pd.DataFrame,
+    df_greeks: Dict[str, pd.DataFrame]
+) -> Tuple[ColumnDataSource, ColumnDataSource, Dict[str, ColumnDataSource]]:
+    """
+    Конвертирует DataFrame в ColumnDataSource с форматированными значениями.
+    
+    Args:
+        df_ohlc: OHLC данные с timestamp, open, high, low, close
+        df_spot: Spot данные с timestamp, value
+        df_greeks: Dict DataFrame с timestamp, value для каждого грека
+    
+    Returns:
+        Tuple of (src_ohlc, src_spot, src_greeks dict)
+    """
+    # Цвет свечей: зелёный если close >= open, красный если close < open
+    colors = [
+        ChartTheme.CANDLE_UP if df_ohlc['close'].iloc[i] >= df_ohlc['open'].iloc[i] 
+        else ChartTheme.CANDLE_DOWN
+        for i in range(len(df_ohlc))
+    ]
+    
+    src_ohlc = ColumnDataSource(dict(
+        timestamp=df_ohlc['timestamp'].tolist(),
+        open=df_ohlc['open'].tolist(),
+        high=df_ohlc['high'].tolist(),
+        low=df_ohlc['low'].tolist(),
+        close=df_ohlc['close'].tolist(),
+        color=colors,
+        open_fmt=[f'{v:.2f}' for v in df_ohlc['open']],
+        high_fmt=[f'{v:.2f}' for v in df_ohlc['high']],
+        low_fmt=[f'{v:.2f}' for v in df_ohlc['low']],
+        close_fmt=[f'{v:.2f}' for v in df_ohlc['close']],
+    ))
+    
+    src_spot = ColumnDataSource(dict(
+        timestamp=df_spot['timestamp'].tolist(),
+        value=df_spot['value'].tolist(),
+        value_fmt=[f'{v:.0f}' for v in df_spot['value']],
+    ))
+    
+    src_greeks = {}
+    for key, df in df_greeks.items():
+        if key == 'gamma':
+            fmt = [f'{v:.6f}' for v in df['value']]
+        elif key == 'delta':
+            fmt = [f'{v:.4f}' for v in df['value']]
+        elif key == 'iv':
+            fmt = [f'{v:.2f}%' for v in df['value']]
+        elif key in ['theta', 'vega']:
+            fmt = [f'${v:.2f}' for v in df['value']]
+        else:
+            fmt = [f'{v:.2f}' for v in df['value']]
+            
+        src_greeks[key] = ColumnDataSource(dict(
+            timestamp=df['timestamp'].tolist(),
+            value=df['value'].tolist(),
+            value_fmt=fmt,
+        ))
+    
+    return src_ohlc, src_spot, src_greeks
+
+
+# ============================================================================
+# СОЗДАНИЕ ГЛАВНОГО ГРАФИКА (СВЕЧИ + СПОТ)
+# ============================================================================
+
+def create_main_chart(
+    src_ohlc: ColumnDataSource,
+    src_spot: ColumnDataSource,
+    height: int,
+    x_range: Range1d = None
+) -> Tuple[Any, Label, Label]:
+    """
+    Создаёт главный график со свечами и спотом.
+    
+    Args:
+        src_ohlc: ColumnDataSource для OHLC
+        src_spot: ColumnDataSource для спота
+        height: высота графика
+        x_range: общий X range или None
+        
+    Returns:
+        Tuple (figure, option_label, spot_label)
+    """
+    # Y-range для OHLC
+    lo = min(src_ohlc.data['low'])
+    hi = max(src_ohlc.data['high'])
+    pad = (hi - lo) * CONFIG.ohlc_y_padding
+    
+    y_range = Range1d(lo - pad, hi + pad, bounds=(lo - pad, hi + pad))
+    
+    # Создаём figure
+    p = PlotFactory.create_main_figure(height, x_range)
+    p.y_range = y_range
+    
+    # ==================== CANDLESTICKS ====================
+    Candlestick.render(p, src_ohlc, CONFIG.candle_width_ratio)
+    
+    # ==================== SPOT LINE (Y2) ====================
+    smin, smax = min(src_spot.data['value']), max(src_spot.data['value'])
+    spad = (smax - smin) * CONFIG.spot_y_padding
+    p.extra_y_ranges = {
+        'spot': Range1d(smin - spad, smax + spad, bounds=(smin - spad, smax + spad))
+    }
+    
+    # Правая ось для спота
+    spot_axis = LinearAxis(y_range_name='spot', axis_label='Spot $')
+    spot_axis.axis_label_text_color = ChartTheme.TEXT_SECONDARY
+    spot_axis.major_label_text_color = ChartTheme.TEXT_SECONDARY
+    spot_axis.major_label_text_font_size = '7pt'
+    spot_axis.axis_label_text_font_size = '8pt'
+    spot_axis.axis_label_text_font_style = 'bold'
+    spot_axis.axis_line_color = ChartTheme.AXIS
+    spot_axis.major_tick_line_color = ChartTheme.AXIS
+    spot_axis.minor_tick_line_color = ChartTheme.AXIS
+    spot_axis.major_tick_in = 2
+    spot_axis.major_tick_out = 2
+    spot_axis.ticker = BasicTicker(desired_num_ticks=4)
+    p.add_layout(spot_axis, 'right')
+    
+    # Линия спота
+    p.line(
+        'timestamp', 'value', source=src_spot,
+        color=ChartTheme.SPOT, line_width=1.5, line_dash='dashed',
+        y_range_name='spot'
+    )
+    
+    # ==================== PRICE LINES ====================
+    last_close = src_ohlc.data['close'][-1]
+    last_spot = src_spot.data['value'][-1]
+    
+    # Price Line для опциона
+    option_price_line = Span(
+        location=last_close, dimension='width',
+        line_color=ChartTheme.CANDLE_UP, line_dash='dotted', line_width=1.5
+    )
+    p.add_layout(option_price_line)
+    
+    # Price Line для спота
+    spot_price_line = Span(
+        location=last_spot, dimension='width',
+        line_color=ChartTheme.SPOT, line_dash='dotted', line_width=1,
+        y_range_name='spot'
+    )
+    p.add_layout(spot_price_line)
+    
+    # ==================== STICKY LABELS ====================
+    option_label, _ = StickyLabel.create_right(
+        p, last_close, f'{last_close:.2f}', ChartTheme.TEXT_SECONDARY
+    )
+    
+    spot_label, _ = StickyLabel.create_left(
+        p, last_spot, f'{last_spot:.0f}', ChartTheme.TEXT_SECONDARY, y_range_name='spot'
+    )
+    
+    # ==================== Y-AXIS STYLING ====================
+    p.yaxis[0].axis_label = 'Option Price ($)'
+    p.yaxis[0].axis_label_text_color = ChartTheme.TEXT_SECONDARY
+    p.yaxis[0].major_label_text_color = ChartTheme.TEXT_SECONDARY
+    p.yaxis[0].major_label_text_font_size = '7pt'
+    p.yaxis[0].axis_label_text_font_size = '8pt'
+    p.yaxis[0].axis_label_text_font_style = 'bold'
+    p.yaxis[0].major_tick_in = 2
+    p.yaxis[0].major_tick_out = 2
+    p.yaxis[0].ticker = BasicTicker(desired_num_ticks=5)
+    
+    return p, option_label, spot_label
+
+
+# ============================================================================
+# СОЗДАНИЕ ГРАФИКА ГРЕКА
+# ============================================================================
+
+def create_greek_chart(
+    src: ColumnDataSource,
+    key: str,
+    x_range: Range1d,
+    height: int
+) -> Tuple[Any, Span, Label]:
+    """
+    Создаёт график для одного грека.
+    
+    Args:
+        src: ColumnDataSource с timestamp и value
+        key: ключ грека (iv, theta, delta, gamma, vega)
+        x_range: общий X range
+        height: высота графика
+        
+    Returns:
+        Tuple (figure, price_line, price_label)
+    """
+    color = ChartTheme.get_greek_color(key)
+    
+    vals = src.data['value']
+    vmin, vmax = min(vals), max(vals)
+    pad = (vmax - vmin) * CONFIG.greek_y_padding if vmax != vmin else 1
+    
+    y_range = Range1d(vmin - pad, vmax + pad, bounds=(vmin - pad, vmax + pad))
+    
+    # Создаём figure
+    p = PlotFactory.create_greek_figure(key, x_range, y_range, height)
+    
+    # ==================== AREA + LINE ====================
+    # Заливка области к нулю
+    p.varea(x='timestamp', y1='value', y2=0, source=src, fill_color=color, fill_alpha=ChartTheme.AREA_FILL_ALPHA)
+    
+    # Линия сверху
+    p.line('timestamp', 'value', source=src, color=color, line_width=2.5)
+    
+    # ==================== PRICE LINE ====================
+    last_value = vals[-1]
+    price_line = Span(
+        location=last_value,
+        dimension='width',
+        line_color=color,
+        line_dash='dotted',
+        line_width=1.5,
+    )
+    p.add_layout(price_line)
+    
+    # ==================== STICKY LABEL ====================
+    price_label, _ = StickyLabel.create_right(
+        p, last_value, GreekConfig.format_value(key, last_value), ChartTheme.TEXT_SECONDARY
+    )
+    
+    return p, price_line, price_label
+
+
+# ============================================================================
+# ГЛАВНАЯ ФУНКЦИЯ СОЗДАНИЯ ГРАФИКА
+# ============================================================================
+
+def create_strike_chart(
+    df_ohlc: pd.DataFrame,
+    df_spot: pd.DataFrame,
+    df_greeks: Dict[str, pd.DataFrame],
+    title: str = "BTC $55,000 CALL",
+    expiry: str = "31 Aug 2024"
+) -> str:
+    """
+    Создаёт полный Strike Chart и возвращает HTML.
+    
+    Args:
+        df_ohlc: DataFrame с OHLC данными
+        df_spot: DataFrame со спотом
+        df_greeks: Dict с DataFrame для каждого грека
+        title: заголовок графика
+        expiry: дата экспирации
+        
+    Returns:
+        HTML строка
+    """
+    t0 = time.time()
+    
+    # ==================== CONVERT TO SOURCES ====================
+    src_ohlc, src_spot, src_greeks = dataframes_to_sources(df_ohlc, df_spot, df_greeks)
+    
+    # ==================== CALCULATE HEIGHTS ====================
+    n_active = len(GreekConfig.KEYS)
+    main_h, greek_h = HeightCalculator.calculate(n_active, total_height=700)
+    
+    # ==================== X RANGE ====================
+    x_min = min(src_ohlc.data['timestamp'])
+    x_max = max(src_ohlc.data['timestamp'])
+    initial_x_range = SmartBounds.create_x_range(x_min, x_max, view_padding=0.02, bounds_padding=0.05)
+    
+    # ==================== MAIN CHART ====================
+    p_main, main_option_label, main_spot_label = create_main_chart(
+        src_ohlc, src_spot, main_h, x_range=initial_x_range
+    )
+    p_main.min_border_bottom = 0
+    
+    # ==================== GREEK CHARTS ====================
+    greek_plots = []
+    greek_price_lines = []
+    greek_price_labels = []
+    
+    for key in GreekConfig.KEYS:
+        p, price_line, price_label = create_greek_chart(
+            src_greeks[key], key,
+            x_range=p_main.x_range,
+            height=greek_h
+        )
+        p.min_border_top = 0
+        p.min_border_bottom = 0
+        greek_plots.append(p)
+        greek_price_lines.append(price_line)
+        greek_price_labels.append(price_label)
+    
+    # ==================== AXIS PLOT ====================
+    axis_plot = SharedAxisPlot.create(
+        p_main.x_range, src_ohlc, 
+        height=CONFIG.xaxis_height,
+        min_border_left=CONFIG.min_border_left,
+        min_border_right=CONFIG.min_border_right
+    )
+    
+    # ==================== ALL PLOTS ====================
+    all_plots = [p_main] + greek_plots + [axis_plot]
+    
+    # ==================== TOGGLE BUTTONS ====================
+    toggles = TogglePanel.create_toggles()
+    
+    # ==================== CROSSHAIR SYNC ====================
+    all_spans = CrosshairSync.create_spans(all_plots, color=ChartTheme.CROSSHAIR)
+    
+    # ==================== DYNAMIC LEGEND ====================
+    legend_div = Div(
+        text=f'''
+        <div style="{ChartTheme.PANEL_STYLE}">
+            <span style="color:{ChartTheme.CANDLE_UP}; font-weight: 600;">
+                O:{src_ohlc.data['close'][-1]:.2f}
+                H:{max(src_ohlc.data['high']):.2f}
+                L:{min(src_ohlc.data['low']):.2f}
+                C:{src_ohlc.data['close'][-1]:.2f}
+            </span>
+            <span style="color:{ChartTheme.SPOT};">
+                Spot: ${src_spot.data['value'][-1]:.0f}
+            </span>
+            <span style="color:{ChartTheme.GREEKS['iv']};">IV:--</span>
+            <span style="color:{ChartTheme.GREEKS['theta']};">Θ:--</span>
+            <span style="color:{ChartTheme.GREEKS['delta']};">Δ:--</span>
+            <span style="color:{ChartTheme.GREEKS['gamma']};">Γ:--</span>
+            <span style="color:{ChartTheme.GREEKS['vega']};">ν:--</span>
+        </div>
+        ''',
+        sizing_mode='stretch_width',
+    )
+    
+    # ==================== HOVER SYNC CALLBACK ====================
+    hover_sync_cb = HoverSyncBuilder.build(
+        legend_div, src_ohlc, src_spot, src_greeks, all_spans, toggles
+    )
+    mouseleave_cb = CrosshairSync.create_hide_callback(all_spans)
+    
+    # Добавляем hover tool на все графики
+    for p in all_plots:
+        hover = HoverTool(tooltips=None, mode='vline', callback=hover_sync_cb)
+        p.add_tools(hover)
+        p.js_on_event('mouseleave', mouseleave_cb)
+    
+    # ==================== AUTO-SCALE Y ====================
+    # OHLC
+    AutoScaleY.attach_to_plot(p_main, src_ohlc, ['high', 'low'], CONFIG.autoscale_padding)
+    
+    # Spot
+    AutoScaleY.attach_to_extra_y_range(p_main, 'spot', src_spot, ['value'], CONFIG.spot_y_padding)
+    
+    # Greeks
+    for i, key in enumerate(GreekConfig.KEYS):
+        AutoScaleY.attach_to_plot(greek_plots[i], src_greeks[key], ['value'], CONFIG.greek_y_padding)
+    
+    # ==================== TOGGLE CALLBACKS ====================
+    toggle_cbs = ToggleCallbackBuilder.build(
+        toggles, greek_plots, p_main,
+        legend_div, src_ohlc, src_spot, src_greeks,
+        fixed_overhead=155
+    )
+    
+    # Controls div
+    controls_div = TogglePanel.create_html_controls(toggles)
+    controls_update_cb = TogglePanel.create_update_callback(controls_div, toggles)
+    
+    for i, toggle in enumerate(toggles):
+        toggle.js_on_change('active', toggle_cbs[i])
+        toggle.js_on_change('active', controls_update_cb)
+    
+    # ==================== RENDER TIME ====================
+    render_ms = (time.time() - t0) * 1000
+    
+    # ==================== HEADER ====================
+    header = Div(text=f'''
+        <div style="
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            padding: 10px 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            border-bottom: 1px solid #eee;
+            margin-bottom: 5px;
+        ">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 18px; font-weight: 700; color: {ChartTheme.TEXT};">
+                    {title}
+                </span>
+                <span style="
+                    font-size: 12px;
+                    color: #888;
+                    background: #f5f5f5;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                ">
+                    {expiry}
+                </span>
+            </div>
+            <div style="font-size: 11px; color: #999; margin-left: auto;">
+                Render: {render_ms:.0f}ms | Bokeh Strike Chart v7.0
+            </div>
+        </div>
+    ''', sizing_mode='stretch_width')
+    
+    # ==================== LAYOUT ====================
+    # Применяем настройки для стыковки
+    LayoutFixer.configure_for_stack(all_plots, CONFIG.min_border_left, CONFIG.min_border_right)
+    
+    # Гарантируем видимость оси X на axis_plot
+    axis_plot.xaxis.visible = True
+    axis_plot.min_border_bottom = 25
+    
+    # Стек графиков
+    chart_stack = column(*all_plots, sizing_mode='stretch_both', spacing=0)
+    
+    # Панель управления
+    control_panel = row(
+        controls_div,
+        Spacer(width=20),
+        legend_div,
+        sizing_mode='stretch_width'
+    )
+    
+    # Скрытые toggle модели
+    hidden_toggles = row(toggles, visible=False)
+    
+    # Финальный layout
+    layout = column(
+        header,
+        control_panel,
+        chart_stack,
+        hidden_toggles,
+        sizing_mode='stretch_both'
+    )
+    
+    # ==================== GENERATE HTML ====================
+    html = file_html(layout, CDN, title=f'{title} - Strike Chart')
+    
+    # Inject responsive CSS и init script
+    responsive_css = LayoutFixer.get_responsive_html_wrapper()
+    init_script = WindowResize.get_init_script()
+    
+    # Дополнительные стили для кнопок
+    extra_styles = '''
+    <style>
+        .bk-root .bk-btn {
+            opacity: 0.6;
+            transition: all 0.2s ease;
+            border: 1px solid transparent;
+        }
+        .bk-root .bk-btn.bk-active {
+            opacity: 1 !important;
+            box-shadow: inset 0 3px 5px rgba(0,0,0,0.2) !important;
+            transform: translateY(1px);
+            font-weight: bold;
+            border: 1px solid rgba(0,0,0,0.1);
+        }
+        .bk-root .bk-btn:hover {
+            opacity: 0.8;
+        }
+        .bk-root .bk-btn.bk-active:hover {
+            opacity: 1;
+        }
+    </style>
+    '''
+    
+    html = html.replace('</head>', f'{responsive_css}{extra_styles}{init_script}</head>')
+    
+    print(f'✅ Chart created in {render_ms:.0f}ms')
+    print(f'   Main: {main_h}px, Greeks: {greek_h}px each (x{n_active})')
+    print(f'   Total points: {len(src_ohlc.data["timestamp"])}')
+    
+    return html
+
+
+# ============================================================================
+# КЛАСС-ОБЁРТКА ДЛЯ ИНТЕГРАЦИИ
+# ============================================================================
+
+class StrikeChart:
+    """
+    Класс для создания Strike Chart.
+    Удобен для интеграции в Dash.
+    
+    Использование:
+        chart = StrikeChart(df_ohlc, df_spot, df_greeks)
+        html = chart.to_html()
+        
+        # Для Dash:
+        # html.Iframe(srcDoc=chart.to_html(), style={'width': '100%', 'height': '100%'})
+    """
+    
+    def __init__(
+        self,
+        df_ohlc: pd.DataFrame,
+        df_spot: pd.DataFrame,
+        df_greeks: Dict[str, pd.DataFrame],
+        title: str = "BTC $55,000 CALL",
+        expiry: str = "31 Aug 2024"
+    ):
+        """
+        Args:
+            df_ohlc: DataFrame с timestamp, open, high, low, close
+            df_spot: DataFrame с timestamp, value
+            df_greeks: Dict[str, DataFrame] с timestamp, value для каждого грека
+            title: заголовок графика
+            expiry: дата экспирации
+        """
+        self.df_ohlc = df_ohlc
+        self.df_spot = df_spot
+        self.df_greeks = df_greeks
+        self.title = title
+        self.expiry = expiry
+    
+    def to_html(self) -> str:
+        """Генерирует HTML."""
+        return create_strike_chart(
+            self.df_ohlc,
+            self.df_spot,
+            self.df_greeks,
+            self.title,
+            self.expiry
+        )
+    
+    def save(self, filepath: str):
+        """Сохраняет в файл."""
+        html = self.to_html()
+        with open(filepath, 'w') as f:
+            f.write(html)
+        print(f'📄 Saved to {filepath}')
+    
+    def show(self):
+        """Открывает в браузере."""
+        import webbrowser
+        import tempfile
+        import os
+        
+        html = self.to_html()
+        
+        # Сохраняем во временный файл
+        fd, path = tempfile.mkstemp(suffix='.html')
+        with os.fdopen(fd, 'w') as f:
+            f.write(html)
+        
+        webbrowser.open(f'file://{path}')
+        print(f'🌐 Opened in browser: {path}')
+
+
+# ============================================================================
+# STANDALONE TEST
+# ============================================================================
+
+if __name__ == '__main__':
+    print('=' * 60)
+    print('🚀 Strike Chart - Standalone Test')
+    print('=' * 60)
+    print()
+    print('Генерация тестовых данных...')
+    
+    # Генерируем тестовые данные
+    df_ohlc, df_spot, df_greeks = generate_test_data(n_points=200)
+    
+    print(f'   OHLC: {len(df_ohlc)} points')
+    print(f'   Spot: {len(df_spot)} points')
+    print(f'   Greeks: {list(df_greeks.keys())}')
+    print()
+    
+    # Создаём график
+    chart = StrikeChart(
+        df_ohlc=df_ohlc,
+        df_spot=df_spot,
+        df_greeks=df_greeks,
+        title="BTC $55,000 CALL",
+        expiry="31 Aug 2024"
+    )
+    
+    # Сохраняем и открываем
+    output_path = 'test_strike_chart_output.html'
+    chart.save(output_path)
+    
+    print()
+    print('ЧЕКЛИСТ ПРОВЕРКИ:')
+    print('[ ] Toggle кнопки IV/Theta/Delta/Gamma/Vega работают')
+    print('[ ] При отключении грека - высоты пересчитываются')
+    print('[ ] Crosshair синхронизирован на всех графиках')
+    print('[ ] Y-axis автомасштабируется при zoom X')
+    print('[ ] Свечи правильного цвета (зелёные вверх, красные вниз)')
+    print('[ ] Легенда обновляется при наведении')
+    print('[ ] Price lines отображаются на всех графиках')
+    print('[ ] Ось X только внизу (общая для всех)')
+    print()
+    
+    # Открываем в браузере
+    import webbrowser
+    import os
+    webbrowser.open(f'file://{os.path.abspath(output_path)}')
+    
+    print('✅ График открыт в браузере')
+Copy
+Продолжаю с четвёртым файлом - smile_chart.py?
+
+Сохранить в Notion
+да
+Понял, продолжаю. Сейчас напишу четвёртый файл — smile_chart.py.
+
+ФАЙЛ 4: smile_chart.py
+
+Copy"""
+ФАЙЛ: smile_chart.py
+НАЗНАЧЕНИЕ: Smile Chart - график волатильности и греков по страйкам (Volatility Smile)
+ЗАВИСИМОСТИ: bokeh_workarounds.py, bokeh_components.py (должны быть в той же папке)
+ТЕСТ: python smile_chart.py → откроется браузер с тестовым графиком
+
+ЧЕКЛИСТ ПРОВЕРКИ:
+[ ] Toggle кнопки IV/Theta/Delta/Gamma/Vega работают
+[ ] При отключении грека - высоты пересчитываются
+[ ] Crosshair синхронизирован на всех графиках  
+[ ] Y-axis автомасштабируется при zoom X
+[ ] Кривые для разных DTE отображаются разными цветами
+[ ] Вертикальная линия ATM (at-the-money) показана
+[ ] Легенда обновляется при наведении
+[ ] Точки данных (scatter) видны на кривых
+"""
+
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Any
+import webbrowser
+import os
+
+# Bokeh imports
+from bokeh.plotting import figure
+from bokeh.models import (
+    ColumnDataSource, Range1d, LinearAxis, HoverTool,
+    Span, Label, Div, Toggle, CustomJS, Title,
+    NumeralTickFormatter, BasicTickFormatter,
+    CrosshairTool, WheelZoomTool, PanTool, ResetTool, SaveTool
+)
+from bokeh.layouts import column, row
+from bokeh.resources import CDN
+from bokeh.embed import file_html
+
+# Local imports
+from bokeh_workarounds import (
+    CrosshairSync, AutoScaleY, StickyLabel, LayoutFixer,
+    SharedAxisPlot, DynamicLegend, WindowResize, SafeModelAccess,
+    TickerFixer, SmartBounds, Formatters
+)
+from bokeh_components import (
+    ChartTheme, GreekConfig, CONFIG,
+    HeightCalculator, TogglePanel, ToggleCallbackBuilder,
+    HoverSyncBuilder, PlotFactory
+)
+
+
+# =============================================================================
+# SMILE-SPECIFIC CONFIGURATION
+# =============================================================================
+
+class SmileConfig:
+    """Конфигурация специфичная для Smile Chart"""
+    
+    # Цвета для разных DTE (дней до экспирации)
+    DTE_COLORS = [
+        '#3498DB',  # 0-7 дней - синий
+        '#9B59B6',  # 7-14 дней - фиолетовый
+        '#E67E22',  # 14-30 дней - оранжевый
+        '#27AE60',  # 30-60 дней - зелёный
+        '#E74C3C',  # 60+ дней - красный
+    ]
+    
+    # Настройки линий
+    LINE_WIDTH = 2.0
+    LINE_ALPHA = 0.9
+    
+    # Настройки точек (scatter)
+    SCATTER_SIZE = 8
+    SCATTER_ALPHA = 0.7
+    
+    # ATM линия
+    ATM_COLOR = '#FFFFFF'
+    ATM_ALPHA = 0.5
+    ATM_DASH = 'dashed'
+    ATM_WIDTH = 1.5
+    
+    # Интерполяция
+    INTERPOLATION_POINTS = 100  # Точек для cubic spline
+
+
+# =============================================================================
+# DATA GENERATION (FOR TESTING)
+# =============================================================================
+
+def generate_test_smile_data(
+    spot_price: float = 50000,
+    n_strikes: int = 20,
+    n_dtes: int = 3
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Генерация тестовых данных для Smile Chart
+    
+    Returns:
+        df: DataFrame с колонками strike, dte, iv, delta, gamma, vega, theta
+        market_state: dict с текущим состоянием рынка
+    """
+    np.random.seed(42)
+    
+    # Страйки вокруг spot price
+    strike_range = spot_price * 0.3  # ±15% от спота
+    strikes = np.linspace(
+        spot_price - strike_range,
+        spot_price + strike_range,
+        n_strikes
+    )
+    
+    # DTE (дни до экспирации)
+    dtes = [7, 30, 90][:n_dtes]
+    
+    data = []
+    
+    for dte in dtes:
+        for strike in strikes:
+            # Moneyness
+            moneyness = np.log(strike / spot_price)
+            
+            # IV smile - параболическая форма с минимумом около ATM
+            base_iv = 0.5 + 0.3 * np.sqrt(dte / 365)  # Base IV зависит от DTE
+            smile_effect = 0.15 * moneyness**2  # Smile эффект
+            skew_effect = -0.05 * moneyness  # Skew (OTM puts дороже)
+            noise = np.random.normal(0, 0.01)
+            
+            iv = base_iv + smile_effect + skew_effect + noise
+            iv = max(0.1, min(2.0, iv))  # Ограничение 10%-200%
+            
+            # Греки (упрощённые формулы)
+            # Delta: от -1 (deep ITM put) до 0 (OTM) для puts, от 0 до 1 для calls
+            d1 = moneyness / (iv * np.sqrt(dte / 365)) + 0.5 * iv * np.sqrt(dte / 365)
+            delta = 0.5 * (1 + np.tanh(d1))  # Approximation of N(d1)
+            
+            # Gamma: максимум около ATM
+            gamma = np.exp(-0.5 * d1**2) / (spot_price * iv * np.sqrt(2 * np.pi * dte / 365))
+            gamma *= 100  # Scale for visibility
+            
+            # Vega: максимум около ATM, больше для длинных DTE
+            vega = spot_price * np.sqrt(dte / 365) * np.exp(-0.5 * d1**2) / np.sqrt(2 * np.pi)
+            vega /= 100  # Scale
+            
+            # Theta: отрицательная, больше для коротких DTE около ATM
+            theta = -spot_price * iv * np.exp(-0.5 * d1**2) / (2 * np.sqrt(2 * np.pi * dte / 365))
+            theta /= 100  # Scale
+            
+            data.append({
+                'strike': strike,
+                'dte': dte,
+                'iv': iv,
+                'delta': delta,
+                'gamma': gamma,
+                'vega': vega,
+                'theta': theta
+            })
+    
+    df = pd.DataFrame(data)
+    
+    market_state = {
+        'spot_price': spot_price,
+        'timestamp': datetime.now(),
+        'symbol': 'BTC-USD'
+    }
+    
+    return df, market_state
+
+
+# =============================================================================
+# DATA CONVERSION
+# =============================================================================
+
+def dataframe_to_sources(
+    df: pd.DataFrame,
+    market_state: Dict[str, Any],
+    selected_dtes: Optional[List[int]] = None
+) -> Dict[str, Any]:
+    """
+    Конвертация DataFrame в ColumnDataSource для каждого DTE и грека
+    
+    Returns:
+        dict с ключами:
+            - 'iv': {dte: ColumnDataSource, ...}
+            - 'delta': {dte: ColumnDataSource, ...}
+            - ... (для каждого грека)
+            - 'spot_price': float
+            - 'dtes': list of selected DTEs
+            - 'dte_colors': {dte: color, ...}
+    """
+    spot_price = market_state['spot_price']
+    
+    # Определяем DTE для отображения
+    available_dtes = sorted(df['dte'].unique())
+    if selected_dtes is None:
+        selected_dtes = available_dtes
+    else:
+        selected_dtes = [d for d in selected_dtes if d in available_dtes]
+    
+    # Назначаем цвета для DTE
+    dte_colors = {}
+    for i, dte in enumerate(selected_dtes):
+        color_idx = min(i, len(SmileConfig.DTE_COLORS) - 1)
+        dte_colors[dte] = SmileConfig.DTE_COLORS[color_idx]
+    
+    # Создаём sources для каждого грека и DTE
+    greek_keys = ['iv', 'delta', 'gamma', 'vega', 'theta']
+    sources = {key: {} for key in greek_keys}
+    
+    for dte in selected_dtes:
+        df_dte = df[df['dte'] == dte].sort_values('strike')
+        
+        for greek_key in greek_keys:
+            # Форматирование значений
+            if greek_key == 'iv':
+                formatted = [f"{v*100:.1f}%" for v in df_dte[greek_key]]
+            elif greek_key == 'delta':
+                formatted = [f"{v:.3f}" for v in df_dte[greek_key]]
+            elif greek_key == 'theta':
+                formatted = [f"{v:.2f}" for v in df_dte[greek_key]]
+            else:
+                formatted = [f"{v:.4f}" for v in df_dte[greek_key]]
+            
+            sources[greek_key][dte] = ColumnDataSource(data={
+                'strike': df_dte['strike'].tolist(),
+                'value': df_dte[greek_key].tolist(),
+                'formatted': formatted,
+                'dte': [dte] * len(df_dte),
+                'dte_label': [f"{dte}D" for _ in range(len(df_dte))]
+            })
+    
+    return {
+        **sources,
+        'spot_price': spot_price,
+        'dtes': selected_dtes,
+        'dte_colors': dte_colors
+    }
+
+
+# =============================================================================
+# CHART CREATION
+# =============================================================================
+
+def create_smile_main_chart(
+    sources: Dict[str, Any],
+    x_range: Range1d,
+    height: int = 400
+) -> Tuple[figure, Dict[str, Any]]:
+    """
+    Создание основного графика IV Smile
+    
+    Returns:
+        p: figure
+        renderers: dict с рендерерами для каждого DTE
+    """
+    spot_price = sources['spot_price']
+    dtes = sources['dtes']
+    dte_colors = sources['dte_colors']
+    iv_sources = sources['iv']
+    
+    # Вычисляем y-range
+    all_iv = []
+    for dte in dtes:
+        all_iv.extend(iv_sources[dte].data['value'])
+    
+    if all_iv:
+        iv_min, iv_max = min(all_iv), max(all_iv)
+        iv_padding = (iv_max - iv_min) * CONFIG.greek_y_padding
+        y_start = max(0, iv_min - iv_padding)
+        y_end = iv_max + iv_padding
+    else:
+        y_start, y_end = 0, 1
+    
+    # Создаём figure
+    p = figure(
+        height=height,
+        x_range=x_range,
+        y_range=Range1d(start=y_start, end=y_end),
+        tools="",
+        toolbar_location=None,
+        sizing_mode='stretch_width'
+    )
+    
+    # Стилизация
+    p.background_fill_color = ChartTheme.BACKGROUND
+    p.border_fill_color = ChartTheme.BACKGROUND
+    p.outline_line_color = None
+    p.grid.grid_line_color = ChartTheme.GRID
+    p.grid.grid_line_alpha = ChartTheme.GRID_ALPHA
+    
+    p.min_border_left = CONFIG.min_border_left
+    p.min_border_right = CONFIG.min_border_right
+    p.min_border_top = 5
+    p.min_border_bottom = 0
+    
+    # Y-axis
+    p.yaxis.axis_label = "IV"
+    p.yaxis.axis_label_text_color = ChartTheme.GREEK_COLORS['iv']
+    p.yaxis.axis_line_color = ChartTheme.AXIS
+    p.yaxis.major_tick_line_color = ChartTheme.AXIS
+    p.yaxis.minor_tick_line_color = None
+    p.yaxis.major_label_text_color = ChartTheme.TEXT
+    p.yaxis.formatter = NumeralTickFormatter(format="0.0%")
+    
+    # X-axis (скрыт, будет общий внизу)
+    p.xaxis.visible = False
+    
+    # ATM линия
+    atm_span = Span(
+        location=spot_price,
+        dimension='height',
+        line_color=SmileConfig.ATM_COLOR,
+        line_alpha=SmileConfig.ATM_ALPHA,
+        line_dash=SmileConfig.ATM_DASH,
+        line_width=SmileConfig.ATM_WIDTH
+    )
+    p.add_layout(atm_span)
+    
+    # Рисуем линии и точки для каждого DTE
+    renderers = {}
+    
+    for dte in dtes:
+        source = iv_sources[dte]
+        color = dte_colors[dte]
+        
+        # Линия
+        line = p.line(
+            x='strike', y='value',
+            source=source,
+            line_color=color,
+            line_width=SmileConfig.LINE_WIDTH,
+            line_alpha=SmileConfig.LINE_ALPHA,
+            legend_label=f"{dte}D"
+        )
+        
+        # Точки
+        scatter = p.scatter(
+            x='strike', y='value',
+            source=source,
+            color=color,
+            size=SmileConfig.SCATTER_SIZE,
+            alpha=SmileConfig.SCATTER_ALPHA
+        )
+        
+        renderers[dte] = {'line': line, 'scatter': scatter}
+    
+    # Легенда
+    p.legend.location = "top_right"
+    p.legend.background_fill_color = ChartTheme.BACKGROUND
+    p.legend.background_fill_alpha = 0.8
+    p.legend.label_text_color = ChartTheme.TEXT
+    p.legend.border_line_color = None
+    p.legend.click_policy = "hide"
+    
+    # HoverTool
+    hover = HoverTool(
+        tooltips=[
+            ("Strike", "@strike{0,0}"),
+            ("IV", "@formatted"),
+            ("DTE", "@dte_label")
+        ],
+        mode='mouse'
+    )
+    p.add_tools(hover)
+    
+    # Sticky label для последнего значения
+    for dte in dtes:
+        source = iv_sources[dte]
+        if len(source.data['value']) > 0:
+            last_value = source.data['value'][-1]
+            label = StickyLabel.create_right(
+                p, y=last_value,
+                text=f"{last_value*100:.1f}%",
+                text_color=dte_colors[dte]
+            )
+    
+    return p, renderers
+
+
+def create_smile_greek_chart(
+    sources: Dict[str, Any],
+    greek_key: str,
+    x_range: Range1d,
+    height: int = 150
+) -> Tuple[figure, Dict[str, Any]]:
+    """
+    Создание графика грека для Smile Chart
+    """
+    dtes = sources['dtes']
+    dte_colors = sources['dte_colors']
+    greek_sources = sources[greek_key]
+    spot_price = sources['spot_price']
+    
+    # Цвет грека
+    greek_color = ChartTheme.GREEK_COLORS.get(greek_key, '#FFFFFF')
+    
+    # Вычисляем y-range
+    all_values = []
+    for dte in dtes:
+        all_values.extend(greek_sources[dte].data['value'])
+    
+    if all_values:
+        v_min, v_max = min(all_values), max(all_values)
+        v_padding = (v_max - v_min) * CONFIG.greek_y_padding
+        if v_padding == 0:
+            v_padding = abs(v_max) * 0.1 if v_max != 0 else 0.1
+        y_start = v_min - v_padding
+        y_end = v_max + v_padding
+    else:
+        y_start, y_end = -1, 1
+    
+    # Создаём figure
+    p = figure(
+        height=height,
+        x_range=x_range,
+        y_range=Range1d(start=y_start, end=y_end),
+        tools="",
+        toolbar_location=None,
+        sizing_mode='stretch_width'
+    )
+    
+    # Стилизация
+    p.background_fill_color = ChartTheme.BACKGROUND
+    p.border_fill_color = ChartTheme.BACKGROUND
+    p.outline_line_color = None
+    p.grid.grid_line_color = ChartTheme.GRID
+    p.grid.grid_line_alpha = ChartTheme.GRID_ALPHA
+    
+    p.min_border_left = CONFIG.min_border_left
+    p.min_border_right = CONFIG.min_border_right
+    p.min_border_top = 0
+    p.min_border_bottom = 0
+    
+    # Y-axis
+    greek_label = GreekConfig.get_symbol(greek_key)
+    p.yaxis.axis_label = greek_label
+    p.yaxis.axis_label_text_color = greek_color
+    p.yaxis.axis_line_color = ChartTheme.AXIS
+    p.yaxis.major_tick_line_color = ChartTheme.AXIS
+    p.yaxis.minor_tick_line_color = None
+    p.yaxis.major_label_text_color = ChartTheme.TEXT
+    
+    # Форматтер для Y-axis
+    tick_format = GreekConfig.TICK_FORMATS.get(greek_key, '0.00')
+    p.yaxis.formatter = NumeralTickFormatter(format=tick_format)
+    
+    # X-axis скрыт
+    p.xaxis.visible = False
+    
+    # ATM линия
+    atm_span = Span(
+        location=spot_price,
+        dimension='height',
+        line_color=SmileConfig.ATM_COLOR,
+        line_alpha=SmileConfig.ATM_ALPHA * 0.5,
+        line_dash=SmileConfig.ATM_DASH,
+        line_width=SmileConfig.ATM_WIDTH * 0.7
+    )
+    p.add_layout(atm_span)
+    
+    # Zero line для theta
+    if greek_key == 'theta':
+        zero_span = Span(
+            location=0,
+            dimension='width',
+            line_color='#666666',
+            line_alpha=0.5,
+            line_dash='dotted',
+            line_width=1
+        )
+        p.add_layout(zero_span)
+    
+    # Рисуем линии для каждого DTE
+    renderers = {}
+    
+    for dte in dtes:
+        source = greek_sources[dte]
+        color = dte_colors[dte]
+        
+        # Area fill
+        values = source.data['value']
+        zeros = [0] * len(values)
+        
+        area_source = ColumnDataSource(data={
+            'strike': source.data['strike'],
+            'value': values,
+            'zero': zeros
+        })
+        
+        area = p.varea(
+            x='strike',
+            y1='zero',
+            y2='value',
+            source=area_source,
+            fill_color=color,
+            fill_alpha=ChartTheme.AREA_FILL_ALPHA * 0.5
+        )
+        
+        # Линия
+        line = p.line(
+            x='strike', y='value',
+            source=source,
+            line_color=color,
+            line_width=SmileConfig.LINE_WIDTH * 0.8,
+            line_alpha=SmileConfig.LINE_ALPHA
+        )
+        
+        renderers[dte] = {'area': area, 'line': line}
+    
+    # HoverTool
+    hover = HoverTool(
+        tooltips=[
+            ("Strike", "@strike{0,0}"),
+            (greek_label, "@formatted"),
+            ("DTE", "@dte_label")
+        ],
+        mode='mouse'
+    )
+    p.add_tools(hover)
+    
+    return p, renderers
+
+
+def create_smile_axis_plot(x_range: Range1d, spot_price: float) -> figure:
+    """
+    Создание отдельного графика для оси X (страйки)
+    """
+    p = figure(
+        height=CONFIG.xaxis_height,
+        x_range=x_range,
+        y_range=Range1d(start=0, end=1),
+        tools="",
+        toolbar_location=None,
+        sizing_mode='stretch_width'
+    )
+    
+    # Полностью прозрачный фон
+    p.background_fill_color = ChartTheme.BACKGROUND
+    p.border_fill_color = ChartTheme.BACKGROUND
+    p.outline_line_color = None
+    p.grid.visible = False
+    p.yaxis.visible = False
+    
+    p.min_border_left = CONFIG.min_border_left
+    p.min_border_right = CONFIG.min_border_right
+    p.min_border_top = 0
+    p.min_border_bottom = 0
+    
+    # X-axis стилизация
+    p.xaxis.axis_label = "Strike"
+    p.xaxis.axis_label_text_color = ChartTheme.TEXT
+    p.xaxis.axis_line_color = ChartTheme.AXIS
+    p.xaxis.major_tick_line_color = ChartTheme.AXIS
+    p.xaxis.minor_tick_line_color = None
+    p.xaxis.major_label_text_color = ChartTheme.TEXT
+    p.xaxis.formatter = NumeralTickFormatter(format="0,0")
+    
+    # ATM метка
+    atm_label = Label(
+        x=spot_price,
+        y=0.5,
+        text="ATM",
+        text_color=SmileConfig.ATM_COLOR,
+        text_alpha=0.7,
+        text_font_size="9px",
+        text_align='center',
+        text_baseline='middle'
+    )
+    p.add_layout(atm_label)
+    
+    return p
+
+
+# =============================================================================
+# MAIN CHART BUILDER
+# =============================================================================
+
+class SmileChart:
+    """Класс для создания Smile Chart с греками"""
+    
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        market_state: Dict[str, Any],
+        selected_dtes: Optional[List[int]] = None,
+        title: str = "Volatility Smile"
+    ):
+        """
+        Args:
+            df: DataFrame с колонками strike, dte, iv, delta, gamma, vega, theta
+            market_state: dict с spot_price, timestamp, symbol
+            selected_dtes: список DTE для отображения (None = все)
+            title: заголовок графика
+        """
+        self.df = df
+        self.market_state = market_state
+        self.selected_dtes = selected_dtes
+        self.title = title
+        
+        # Конвертируем данные
+        self.sources = dataframe_to_sources(df, market_state, selected_dtes)
+        
+    def render(
+        self,
+        total_height: int = 700,
+        visible_greeks: Optional[List[str]] = None
+    ) -> str:
+        """
+        Рендеринг графика в HTML
+        
+        Args:
+            total_height: общая высота всех графиков
+            visible_greeks: список греков для отображения ['theta', 'delta', 'gamma', 'vega']
+                           (None = все видимы)
+        
+        Returns:
+            HTML string
+        """
+        if visible_greeks is None:
+            visible_greeks = ['theta', 'delta', 'gamma', 'vega']
+        
+        n_greeks = len(visible_greeks)
+        spot_price = self.sources['spot_price']
+        dtes = self.sources['dtes']
+        
+        # Рассчитываем высоты
+        heights = HeightCalculator.calculate(n_greeks, total_height - CONFIG.xaxis_height)
+        main_height = heights['main_height']
+        greek_height = heights['greek_height']
+        
+        # X-range для всех графиков
+        all_strikes = []
+        for dte in dtes:
+            all_strikes.extend(self.sources['iv'][dte].data['strike'])
+        
+        if all_strikes:
+            x_min, x_max = min(all_strikes), max(all_strikes)
+            x_padding = (x_max - x_min) * 0.05
+        else:
+            x_min, x_max = spot_price * 0.7, spot_price * 1.3
+            x_padding = spot_price * 0.05
+        
+        x_range = Range1d(start=x_min - x_padding, end=x_max + x_padding)
+        
+        # Создаём основной IV график
+        p_main, main_renderers = create_smile_main_chart(
+            self.sources, x_range, height=main_height
+        )
+        
+        # Добавляем заголовок
+        symbol = self.market_state.get('symbol', 'OPTION')
+        timestamp = self.market_state.get('timestamp', datetime.now())
+        if isinstance(timestamp, datetime):
+            time_str = timestamp.strftime("%Y-%m-%d %H:%M")
+        else:
+            time_str = str(timestamp)
+        
+        dte_str = ", ".join([f"{d}D" for d in dtes])
+        title_text = f"{symbol} | {self.title} | DTE: {dte_str} | {time_str}"
+        p_main.add_layout(Title(text=title_text, text_color=ChartTheme.TEXT), 'above')
+        
+        # Добавляем инструменты
+        wheel_zoom = WheelZoomTool(dimensions='width')
+        p_main.add_tools(PanTool(dimensions='width'), wheel_zoom, ResetTool(), SaveTool())
+        p_main.toolbar.active_scroll = wheel_zoom
+        
+        # Создаём Crosshair
+        crosshair_spans = CrosshairSync.create_spans()
+        for span in crosshair_spans:
+            p_main.add_layout(span)
+        
+        # Создаём графики греков
+        greek_plots = {}
+        greek_renderers = {}
+        
+        for greek_key in visible_greeks:
+            p_greek, renderers = create_smile_greek_chart(
+                self.sources, greek_key, x_range, height=greek_height
+            )
+            
+            # Добавляем crosshair spans
+            for span in CrosshairSync.create_spans():
+                p_greek.add_layout(span)
+            
+            greek_plots[greek_key] = p_greek
+            greek_renderers[greek_key] = renderers
+        
+        # Ось X
+        p_axis = create_smile_axis_plot(x_range, spot_price)
+        for span in CrosshairSync.create_spans():
+            p_axis.add_layout(span)
+        
+        # Собираем все графики для crosshair sync
+        all_plots = [p_main] + list(greek_plots.values()) + [p_axis]
+        
+        # Создаём callback для синхронизации crosshair
+        all_spans = []
+        for p in all_plots:
+            for r in p.renderers:
+                if hasattr(r, 'location') and isinstance(r, Span):
+                    all_spans.append(r)
+        
+        if all_spans:
+            crosshair_cb = CrosshairSync.create_callback(all_spans)
+            for p in all_plots:
+                p.js_on_event('mousemove', crosshair_cb)
+        
+        # Hide callback при mouseleave
+        hide_cb = CrosshairSync.create_hide_callback(all_spans)
+        for p in all_plots:
+            p.js_on_event('mouseleave', hide_cb)
+        
+        # Auto-scale Y для каждого графика
+        # Для IV (main)
+        iv_data_for_autoscale = []
+        for dte in dtes:
+            iv_data_for_autoscale.extend(list(zip(
+                self.sources['iv'][dte].data['strike'],
+                self.sources['iv'][dte].data['value']
+            )))
+        
+        if iv_data_for_autoscale:
+            AutoScaleY.attach_to_plot(
+                p_main,
+                iv_data_for_autoscale,
+                padding=CONFIG.autoscale_padding
+            )
+        
+        # Для греков
+        for greek_key, p_greek in greek_plots.items():
+            greek_data = []
+            for dte in dtes:
+                greek_data.extend(list(zip(
+                    self.sources[greek_key][dte].data['strike'],
+                    self.sources[greek_key][dte].data['value']
+                )))
+            
+            if greek_data:
+                AutoScaleY.attach_to_plot(
+                    p_greek,
+                    greek_data,
+                    padding=CONFIG.autoscale_padding
+                )
+        
+        # Создаём toggle panel
+        toggles = TogglePanel.create_toggles()
+        
+        # Собираем все греки в список для toggle callback
+        greek_plots_list = [
+            greek_plots.get('theta'),
+            greek_plots.get('delta'),
+            greek_plots.get('gamma'),
+            greek_plots.get('vega')
+        ]
+        # Фильтруем None
+        greek_plots_list = [p for p in greek_plots_list if p is not None]
+        
+        # Создаём toggle callbacks
+        toggle_cb_builder = ToggleCallbackBuilder()
+        toggle_callbacks = toggle_cb_builder.build(
+            toggles=toggles,
+            main_plot=p_main,
+            greek_plots=greek_plots_list,
+            axis_plot=p_axis,
+            total_height=total_height - CONFIG.xaxis_height
+        )
+        
+        # Применяем callbacks
+        toggle_keys = ['iv', 'theta', 'delta', 'gamma', 'vega']
+        for i, key in enumerate(toggle_keys):
+            if i < len(toggle_callbacks):
+                toggles[key].js_on_change('active', toggle_callbacks[i])
+        
+        # HTML controls
+        controls_div = TogglePanel.create_html_controls(toggles)
+        
+        # Layout
+        chart_elements = [controls_div, p_main]
+        for greek_key in ['theta', 'delta', 'gamma', 'vega']:
+            if greek_key in greek_plots:
+                chart_elements.append(greek_plots[greek_key])
+        chart_elements.append(p_axis)
+        
+        layout = column(
+            *chart_elements,
+            sizing_mode='stretch_width',
+            spacing=0
+        )
+        
+        # Генерируем HTML
+        html = file_html(layout, CDN, title=self.title)
+        
+        # Добавляем responsive wrapper
+        html = LayoutFixer.get_responsive_html_wrapper(html)
+        
+        # Добавляем версию
+        version_comment = "<!-- Smile Chart v7.0 - Generated by SmileChart class -->\n"
+        html = version_comment + html
+        
+        return html
+    
+    def to_html(self, **kwargs) -> str:
+        """Alias для render()"""
+        return self.render(**kwargs)
+    
+    def save(self, filepath: str, **kwargs) -> str:
+        """
+        Сохранение графика в HTML файл
+        
+        Args:
+            filepath: путь к файлу
+            **kwargs: аргументы для render()
+        
+        Returns:
+            filepath
+        """
+        html = self.render(**kwargs)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(html)
+        return filepath
+
+
+# =============================================================================
+# STANDALONE TEST
+# =============================================================================
+
+if __name__ == '__main__':
+    print("=" * 60)
+    print("SMILE CHART TEST")
+    print("=" * 60)
+    
+    # 1. Генерация тестовых данных
+    print("\n1. Генерация тестовых данных...")
+    df, market_state = generate_test_smile_data(
+        spot_price=50000,
+        n_strikes=25,
+        n_dtes=3
+    )
+    print(f"   Создано {len(df)} точек данных")
+    print(f"   Страйки: {df['strike'].min():.0f} - {df['strike'].max():.0f}")
+    print(f"   DTE: {sorted(df['dte'].unique())}")
+    print(f"   Spot price: {market_state['spot_price']}")
+    
+    # 2. Создание графика
+    print("\n2. Создание SmileChart...")
+    chart = SmileChart(
+        df=df,
+        market_state=market_state,
+        title="BTC Volatility Smile"
+    )
+    
+    # 3. Рендеринг
+    print("\n3. Рендеринг HTML...")
+    html = chart.render(total_height=700)
+    print(f"   HTML размер: {len(html):,} байт")
+    
+    # 4. Сохранение
+    output_path = "test_smile_chart_output.html"
+    print(f"\n4. Сохранение в {output_path}...")
+    chart.save(output_path)
+    
+    # 5. Открытие в браузере
+    print("\n5. Открытие в браузере...")
+    abs_path = os.path.abspath(output_path)
+    webbrowser.open(f"file://{abs_path}")
+    
+    print("\n" + "=" * 60)
+    print("ЧЕКЛИСТ ПРОВЕРКИ:")
+    print("=" * 60)
+    print("[ ] Toggle кнопки работают (IV скрывает/показывает легенду)")
+    print("[ ] Кнопки Theta/Delta/Gamma/Vega скрывают/показывают графики")
+    print("[ ] При отключении грека - высоты пересчитываются")
+    print("[ ] Crosshair синхронизирован на всех графиках")
+    print("[ ] Y-axis автомасштабируется при zoom X")
+    print("[ ] Кривые для разных DTE имеют разные цвета")
+    print("[ ] Вертикальная линия ATM видна")
+    print("[ ] Легенда кликабельна (можно скрыть отдельные DTE)")
+    print("[ ] Точки данных видны на кривых")
+    print("=" * 60)
+Copy
+Готов четвёртый файл.
+
+Понял, делаю 5 греков как везде.
+
+---
+
+**ФАЙЛ 5: surface_chart.py**
+
+```python
+"""
+ФАЙЛ: surface_chart.py
+НАЗНАЧЕНИЕ: Surface Chart - 3D поверхность волатильности и греков (Plotly)
+ЗАВИСИМОСТИ: нет (независимый от Bokeh, использует только Plotly)
+ТЕСТ: python surface_chart.py → откроется браузер с тестовым графиком
+
+ЧЕКЛИСТ ПРОВЕРКИ:
+[ ] Toggle кнопки IV/Theta/Delta/Gamma/Vega работают
+[ ] При отключении грека - grid перестраивается
+[ ] 3D поверхности вращаются мышкой
+[ ] Цвета соответствуют другим графикам (Strike/Smile)
+[ ] Layout адаптируется: 1-6 графиков разные сетки
+[ ] Window resize корректно обрабатывается
+"""
+
+import numpy as np
+import json
+import math
+import webbrowser
+import os
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+
+
+# =============================================================================
+# CONSTANTS & COLORS (Unified with Strike/Smile charts)
+# =============================================================================
+
+class ChartTheme:
+    """Единые цвета для всех графиков"""
+    
+    # Цвета греков (совпадают с bokeh_components.py)
+    GREEK_COLORS = {
+        'iv': '#9B59B6',      # Purple
+        'theta': '#E67E22',   # Orange  
+        'delta': '#3498DB',   # Blue
+        'gamma': '#F1C40F',   # Yellow
+        'vega': '#1ABC9C',    # Cyan/Teal
+    }
+    
+    # UI цвета
+    BACKGROUND = '#FFFFFF'
+    TEXT = '#333333'
+    GRID = '#F0F0F0'
+    BORDER = '#e0e0e0'
+    INACTIVE_TEXT = '#7F8C8D'
+    INACTIVE_BORDER = '#ced4da'
+
+
+# Единый стиль панели (совпадает с Strike/Smile)
+PANEL_STYLE = """
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px;
+    padding: 6px 15px;
+    background: linear-gradient(90deg, rgba(255,255,255,0.98), rgba(248,249,250,0.98));
+    border-radius: 6px;
+    border: 1px solid #e0e0e0;
+    display: inline-flex;
+    gap: 15px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    align-items: center;
+    height: 36px;
+    box-sizing: border-box;
+    margin-bottom: 2px;
+"""
+
+# Порядок греков (совпадает с Strike/Smile)
+GREEK_ORDER = ['iv', 'theta', 'delta', 'gamma', 'vega']
+
+GREEK_LABELS = {
+    'iv': 'IV',
+    'theta': 'Θ',
+    'delta': 'Δ',
+    'gamma': 'Γ',
+    'vega': 'ν',
+}
+
+
+# =============================================================================
+# MATH HELPERS
+# =============================================================================
+
+def norm_pdf(x):
+    """Standard normal PDF"""
+    return np.exp(-0.5 * x**2) / np.sqrt(2 * np.pi)
+
+
+def norm_cdf(x):
+    """Standard normal CDF"""
+    erf_vec = np.vectorize(math.erf)
+    return 0.5 * (1 + erf_vec(x / np.sqrt(2)))
+
+
+# =============================================================================
+# DATA GENERATION
+# =============================================================================
+
+def generate_surface_data(
+    spot: float = 50000,
+    n_strikes: int = 40,
+    n_dtes: int = 15
+) -> Dict[str, Any]:
+    """
+    Генерация данных для 3D поверхности
+    
+    Args:
+        spot: текущая цена базового актива
+        n_strikes: количество страйков
+        n_dtes: количество DTE (дней до экспирации)
+    
+    Returns:
+        dict с ключами: strikes, dtes, iv, delta, gamma, vega, theta
+    """
+    strikes = np.linspace(spot * 0.6, spot * 1.4, n_strikes)
+    dtes = np.linspace(1, 120, n_dtes)
+    
+    S_mesh, T_mesh = np.meshgrid(strikes, dtes)
+    T_years = T_mesh / 365.0
+    
+    def calc_greeks(S, K, T, v, r=0.0):
+        """Расчёт греков по Black-Scholes"""
+        v = v / 100.0  # Конвертация из процентов
+        
+        # Защита от деления на ноль
+        sqrt_T = np.sqrt(np.maximum(T, 1e-10))
+        v_sqrt_T = v * sqrt_T
+        
+        d1 = (np.log(S / K) + (r + 0.5 * v**2) * T) / v_sqrt_T
+        d2 = d1 - v_sqrt_T
+        
+        delta = norm_cdf(d1)
+        gamma = norm_pdf(d1) / (S * v_sqrt_T)
+        theta = -(S * norm_pdf(d1) * v) / (2 * sqrt_T) - r * K * np.exp(-r * T) * norm_cdf(d2)
+        vega = S * sqrt_T * norm_pdf(d1)
+        
+        return delta, gamma * 10000, theta / 365.0, vega / 100.0
+
+    # IV Surface - параболический smile с term structure
+    moneyness = np.log(S_mesh / spot)
+    base_iv = 50
+    iv_surface = base_iv + 60 * moneyness**2 + 5 / np.sqrt(T_years + 0.05)
+    iv_surface = np.clip(iv_surface, 15, 180)
+    
+    # Греки
+    delta, gamma, theta, vega = calc_greeks(spot, S_mesh, T_years, iv_surface)
+    
+    return {
+        'strikes': strikes.tolist(),
+        'dtes': dtes.tolist(),
+        'iv': iv_surface.tolist(),
+        'delta': delta.tolist(),
+        'gamma': gamma.tolist(),
+        'theta': theta.tolist(),
+        'vega': vega.tolist(),
+        'spot': spot
+    }
+
+
+# =============================================================================
+# HTML TEMPLATE
+# =============================================================================
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body { 
+            font-family: 'SF Mono', Monaco, monospace; 
+            margin: 0; 
+            padding: 8px; 
+            background: #f8f9fa; 
+            height: 100vh; 
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; 
+        }
+        
+        .controls-container {
+            display: flex;
+            justify-content: center;
+            flex-shrink: 0;
+            margin-bottom: 5px;
+        }
+        
+        .panel {
+            {{ panel_style }}
+        }
+        
+        .toggle-group { 
+            display: flex; 
+            gap: 10px; 
+            align-items: center; 
+        }
+        
+        .toggle-label {
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            height: 24px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            border: 1px solid {{ inactive_border }};
+            color: {{ inactive_text }};
+            background: rgba(255,255,255,0.9);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        
+        .toggle-label:hover {
+            border-color: #bbb;
+            background: #fff;
+        }
+
+        .toggle-label.active {
+            background: #fff;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .toggle-label input { 
+            display: none; 
+        }
+        
+        .chart-grid {
+            flex-grow: 1;
+            display: grid;
+            gap: 5px;
+            width: 100%;
+            height: 100%;
+            transition: all 0.3s ease;
+        }
+        
+        .chart-container {
+            background: white;
+            border-radius: 4px;
+            overflow: hidden;
+            border: 1px solid #eee;
+            position: relative;
+        }
+        
+        .chart-title {
+            position: absolute;
+            top: 8px;
+            left: 12px;
+            font-size: 10px;
+            font-weight: 800;
+            z-index: 10;
+            pointer-events: none;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .hidden { 
+            display: none !important; 
+        }
+
+        /* Grid layouts для разного количества видимых графиков */
+        .layout-1 { 
+            grid-template-columns: 1fr; 
+            grid-template-rows: 1fr; 
+        }
+        
+        .layout-2 { 
+            grid-template-columns: 1fr 1fr; 
+            grid-template-rows: 1fr; 
+        }
+        
+        .layout-3 { 
+            grid-template-columns: 1fr 1fr; 
+            grid-template-rows: 1fr 1fr; 
+        }
+        .layout-3 .visible-slot-1 { grid-row: 1 / span 2; grid-column: 1; }
+        .layout-3 .visible-slot-2 { grid-row: 1; grid-column: 2; }
+        .layout-3 .visible-slot-3 { grid-row: 2; grid-column: 2; }
+        
+        .layout-4 { 
+            grid-template-columns: 1fr 1fr; 
+            grid-template-rows: 1fr 1fr; 
+        }
+        
+        .layout-5 { 
+            grid-template-columns: 1fr 1fr 1fr; 
+            grid-template-rows: 1fr 1fr; 
+        }
+        .layout-5 .visible-slot-1 { grid-row: 1; grid-column: 1; }
+        .layout-5 .visible-slot-2 { grid-row: 1; grid-column: 2; }
+        .layout-5 .visible-slot-3 { grid-row: 2; grid-column: 1; }
+        .layout-5 .visible-slot-4 { grid-row: 2; grid-column: 2; }
+        .layout-5 .visible-slot-5 { grid-row: 1 / span 2; grid-column: 3; }
+    </style>
+</head>
+<body>
+    <div class="controls-container">
+        <div class="panel">
+            <div class="toggle-group">
+                {% for key in greek_order %}
+                <label class="toggle-label chart-toggle-label" id="label-{{ key }}">
+                    <input type="checkbox" 
+                           class="chart-toggle" 
+                           value="{{ key }}" 
+                           checked 
+                           data-color="{{ colors[key] }}">
+                    <span>{{ labels[key] }}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    
+    <div id="main-grid" class="chart-grid">
+        {% for key in greek_order %}
+        <div id="container-{{ key }}" class="chart-container">
+            <div class="chart-title" style="color: {{ colors[key] }}">
+                {{ labels[key] }} (3D SURFACE)
+            </div>
+            <div id="plot-{{ key }}" style="width:100%; height:100%;"></div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <script>
+        // Data from Python
+        const surfaceData = {{ data_json }};
+        const greekColors = {{ colors_json }};
+        const greekOrder = {{ order_json }};
+
+        /**
+         * Создание 3D surface для одного грека
+         */
+        function createSurface(elementId, key, color) {
+            const z = surfaceData[key];
+            const x = surfaceData.strikes;
+            const y = surfaceData.dtes;
+
+            const trace = {
+                z: z,
+                x: x,
+                y: y,
+                type: 'surface',
+                colorscale: [
+                    [0, 'rgba(255,255,255,0.1)'],
+                    [1, color]
+                ],
+                showscale: false,
+                opacity: 0.9,
+                lighting: {
+                    ambient: 0.6,
+                    diffuse: 0.8,
+                    fresnel: 0.2,
+                    specular: 0.1,
+                    roughness: 0.5
+                },
+                contours: {
+                    z: { 
+                        show: true, 
+                        usecolormap: true, 
+                        project: { z: true }, 
+                        color: '#eee' 
+                    }
+                }
+            };
+
+            const layout = {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                margin: { l: 0, r: 0, b: 0, t: 0 },
+                scene: {
+                    xaxis: { 
+                        title: 'Strike', 
+                        gridcolor: '#f0f0f0', 
+                        showbackground: false, 
+                        showticklabels: true, 
+                        tickfont: { size: 10, color: '#666' } 
+                    },
+                    yaxis: { 
+                        title: 'DTE', 
+                        gridcolor: '#f0f0f0', 
+                        showbackground: false, 
+                        showticklabels: true, 
+                        tickfont: { size: 10, color: '#666' } 
+                    },
+                    zaxis: { 
+                        title: '', 
+                        gridcolor: '#f0f0f0', 
+                        showbackground: false, 
+                        showticklabels: true, 
+                        tickfont: { size: 10, color: '#666' } 
+                    },
+                    camera: {
+                        eye: { x: 1.6, y: 1.6, z: 1.2 }
+                    }
+                }
+            };
+
+            Plotly.newPlot(elementId, [trace], layout, { 
+                displayModeBar: false,
+                responsive: true
+            });
+        }
+
+        /**
+         * Перерисовка всех активных графиков
+         */
+        function updatePlots() {
+            const activeToggles = document.querySelectorAll('.chart-toggle:checked');
+            activeToggles.forEach(input => {
+                const key = input.value;
+                const color = greekColors[key];
+                createSurface('plot-' + key, key, color);
+            });
+        }
+
+        /**
+         * Обновление layout сетки при toggle
+         */
+        function updateLayout() {
+            const toggleInputs = document.querySelectorAll('.chart-toggle');
+            const grid = document.getElementById('main-grid');
+            let activeCount = 0;
+            
+            // Сначала скрываем все и сбрасываем стили
+            toggleInputs.forEach(input => {
+                const key = input.value;
+                const container = document.getElementById('container-' + key);
+                const label = input.parentElement;
+                const color = input.dataset.color;
+                
+                // Сбрасываем классы слотов
+                container.className = 'chart-container';
+                
+                if (input.checked) {
+                    activeCount++;
+                    container.classList.remove('hidden');
+                    container.classList.add('visible-slot-' + activeCount);
+                    
+                    // Активный стиль кнопки
+                    label.classList.add('active');
+                    label.style.borderColor = color;
+                    label.style.color = color;
+                } else {
+                    container.classList.add('hidden');
+                    
+                    // Неактивный стиль кнопки
+                    label.classList.remove('active');
+                    label.style.borderColor = '{{ inactive_border }}';
+                    label.style.color = '{{ inactive_text }}';
+                }
+            });
+            
+            // Применяем layout класс
+            grid.className = 'chart-grid';
+            if (activeCount > 0) {
+                grid.classList.add('layout-' + Math.min(activeCount, 5));
+            }
+            
+            // Trigger resize и перерисовка
+            window.dispatchEvent(new Event('resize'));
+            
+            // Небольшая задержка для корректного resize
+            setTimeout(updatePlots, 50);
+        }
+
+        // Event listeners
+        document.querySelectorAll('.chart-toggle').forEach(toggle => {
+            toggle.addEventListener('change', updateLayout);
+        });
+
+        // Window resize handler
+        window.addEventListener('resize', () => {
+            document.querySelectorAll('.chart-toggle:checked').forEach(input => {
+                const plotDiv = document.getElementById('plot-' + input.value);
+                if (plotDiv && plotDiv.data) {
+                    Plotly.Plots.resize(plotDiv);
+                }
+            });
+        });
+
+        // Initial render
+        updateLayout();
+    </script>
+</body>
+</html>
+"""
+
+
+# =============================================================================
+# SURFACE CHART CLASS
+# =============================================================================
+
+class SurfaceChart:
+    """
+    Класс для создания 3D Surface Chart греков
+    
+    Использует Plotly для 3D визуализации.
+    Единый стиль кнопок с Strike/Smile charts.
+    """
+    
+    def __init__(
+        self,
+        data: Optional[Dict[str, Any]] = None,
+        spot: float = 50000,
+        n_strikes: int = 40,
+        n_dtes: int = 15,
+        title: str = "3D Volatility Surface & Greeks"
+    ):
+        """
+        Args:
+            data: готовые данные (dict с strikes, dtes, iv, delta, gamma, theta, vega)
+                  если None - генерируются тестовые данные
+            spot: цена базового актива (используется если data=None)
+            n_strikes: количество страйков (используется если data=None)
+            n_dtes: количество DTE (используется если data=None)
+            title: заголовок графика
+        """
+        self.title = title
+        
+        if data is None:
+            self.data = generate_surface_data(spot, n_strikes, n_dtes)
+        else:
+            self.data = data
+            
+    def render(
+        self,
+        visible_greeks: Optional[List[str]] = None
+    ) -> str:
+        """
+        Рендеринг графика в HTML
+        
+        Args:
+            visible_greeks: список греков для начального отображения
+                           (None = все видимы)
+        
+        Returns:
+            HTML string
+        """
+        if visible_greeks is None:
+            visible_greeks = GREEK_ORDER.copy()
+        
+        # Фильтруем данные только для нужных греков
+        greek_order = [g for g in GREEK_ORDER if g in visible_greeks or g in GREEK_ORDER]
+        
+        # Jinja2 template rendering
+        from jinja2 import Template
+        template = Template(HTML_TEMPLATE)
+        
+        html = template.render(
+            title=self.title,
+            panel_style=PANEL_STYLE,
+            greek_order=GREEK_ORDER,
+            labels=GREEK_LABELS,
+            colors=ChartTheme.GREEK_COLORS,
+            colors_json=json.dumps(ChartTheme.GREEK_COLORS),
+            order_json=json.dumps(GREEK_ORDER),
+            data_json=json.dumps(self.data),
+            inactive_border=ChartTheme.INACTIVE_BORDER,
+            inactive_text=ChartTheme.INACTIVE_TEXT
+        )
+        
+        # Добавляем версию
+        version_comment = "<!-- Surface Chart v7.0 - Generated by SurfaceChart class -->\n"
+        html = version_comment + html
+        
+        return html
+    
+    def to_html(self, **kwargs) -> str:
+        """Alias для render()"""
+        return self.render(**kwargs)
+    
+    def save(self, filepath: str, **kwargs) -> str:
+        """
+        Сохранение графика в HTML файл
+        
+        Args:
+            filepath: путь к файлу
+            **kwargs: аргументы для render()
+        
+        Returns:
+            filepath
+        """
+        html = self.render(**kwargs)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(html)
+        return filepath
+    
+    def to_dash(self):
+        """
+        Возвращает компонент для Dash (html.Iframe)
+        
+        Returns:
+            dash.html.Iframe component
+        """
+        from dash import html
+        return html.Iframe(
+            srcDoc=self.render(),
+            style={
+                'width': '100%',
+                'height': '700px',
+                'border': 'none'
+            }
+        )
+
+
+# =============================================================================
+# STANDALONE TEST
+# =============================================================================
+
+if __name__ == '__main__':
+    print("=" * 60)
+    print("SURFACE CHART TEST")
+    print("=" * 60)
+    
+    # 1. Генерация данных
+    print("\n1. Генерация тестовых данных...")
+    data = generate_surface_data(
+        spot=50000,
+        n_strikes=40,
+        n_dtes=15
+    )
+    print(f"   Страйки: {len(data['strikes'])} точек")
+    print(f"   DTE: {len(data['dtes'])} точек")
+    print(f"   Spot: {data['spot']}")
+    
+    # 2. Создание графика
+    print("\n2. Создание SurfaceChart...")
+    chart = SurfaceChart(
+        data=data,
+        title="BTC 3D Volatility Surface"
+    )
+    
+    # 3. Рендеринг
+    print("\n3. Рендеринг HTML...")
+    html = chart.render()
+    print(f"   HTML размер: {len(html):,} байт")
+    
+    # 4. Сохранение
+    output_path = "test_surface_chart_output.html"
+    print(f"\n4. Сохранение в {output_path}...")
+    chart.save(output_path)
+    
+    # 5. Открытие в браузере
+    print("\n5. Открытие в браузере...")
+    abs_path = os.path.abspath(output_path)
+    webbrowser.open(f"file://{abs_path}")
+    
+    print("\n" + "=" * 60)
+    print("ЧЕКЛИСТ ПРОВЕРКИ:")
+    print("=" * 60)
+    print("[ ] Toggle кнопки IV/Θ/Δ/Γ/ν работают")
+    print("[ ] При отключении грека - grid перестраивается")
+    print("[ ] 3D поверхности вращаются мышкой")
+    print("[ ] Цвета совпадают: IV=#9B59B6, Θ=#E67E22, Δ=#3498DB, Γ=#F1C40F, ν=#1ABC9C")
+    print("[ ] Layout адаптируется (1/2/3/4/5 графиков)")
+    print("[ ] Window resize корректно работает")
+    print("[ ] Кнопки имеют тот же стиль что в Strike/Smile")
+    print("=" * 60)
+```
+
+---
+
+**Изменения относительно оригинала:**
+
+| Что было | Что стало |
+|----------|-----------|
+| 6 греков (IV, Delta, Gamma, Vega, Theta, Rho) | 5 греков (IV, Theta, Delta, Gamma, Vega) |
+| Порядок: IV, Delta, Gamma, Vega, Theta, Rho | Порядок: IV, Θ, Δ, Γ, ν (как в Strike/Smile) |
+| Функция `main()` | Класс `SurfaceChart` с методами `render()`, `to_html()`, `save()`, `to_dash()` |
+| Только standalone HTML | + готовый метод для Dash интеграции |
+| Цвета в dict | Цвета в классе `ChartTheme` (унифицированы) |
+| layout-6 | Убран (максимум 5 графиков) |
+
+**Резюме всех 5 файлов:**
+
+| # | Файл | Назначение | Библиотека |
+|---|------|------------|------------|
+| 1 | `bokeh_workarounds.py` | Слой костылей Bokeh | Bokeh |
+| 2 | `bokeh_components.py` | Переиспользуемые компоненты | Bokeh |
+| 3 | `strike_chart.py` | Свечной график + греки | Bokeh |
+| 4 | `smile_chart.py` | Volatility Smile + греки | Bokeh |
+| 5 | `surface_chart.py` | 3D поверхность греков | Plotly |
+
+Все 5 файлов готовы. Нужно что-то ещё?
