@@ -438,7 +438,22 @@ class HoverSyncBuilder:
             const showGamma = toggles[3].active ? 'inline' : 'none';
             const showVega = toggles[4].active ? 'inline' : 'none';
             const dateStr = new Date(ts[idx]).toLocaleDateString('en-US', {day:'2-digit', month:'short', year:'numeric'});
-            legend_div.text = `<div style="${panel_style}"><span style="color:#666;">${dateStr}</span> <span style="color:${colors.iv};">O:${src_ohlc.data.open[idx].toFixed(2)} H:${src_ohlc.data.high[idx].toFixed(2)} L:${src_ohlc.data.low[idx].toFixed(2)} C:${src_ohlc.data.close[idx].toFixed(2)}</span> <span style="color:#969696;">Spot: $${src_spot.data.value[idx].toFixed(0)}</span> <span style="color:${colors.iv}; display:${showIV};">IV:${src_iv.data.value[idx].toFixed(2)}%</span> <span style="color:${colors.theta}; display:${showTheta};">Θ:$${src_theta.data.value[idx].toFixed(2)}</span> <span style="color:${colors.delta}; display:${showDelta};">Δ:${src_delta.data.value[idx].toFixed(4)}</span> <span style="color:${colors.gamma}; display:${showGamma};">Γ:${src_gamma.data.value[idx].toFixed(6)}</span> <span style="color:${colors.vega}; display:${showVega};">ν:$${src_vega.data.value[idx].toFixed(2)}</span></div>`;
+            legend_div.text = `<div style="${panel_style}">
+                <span style="color:${colors.call}; font-weight: 700; font-size: 12px; font-variant-numeric: tabular-nums;">
+                    O:${src_ohlc.data.open[idx].toFixed(2)} 
+                    H:${src_ohlc.data.high[idx].toFixed(2)} 
+                    L:${src_ohlc.data.low[idx].toFixed(2)} 
+                    C:${src_ohlc.data.close[idx].toFixed(2)}
+                </span> 
+                <span style="color:${colors.spot}; font-weight: 700; font-size: 12px; font-variant-numeric: tabular-nums;">
+                    Spot: $${src_spot.data.value[idx].toFixed(0)}
+                </span> 
+                <span style="color:${colors.iv}; display:${showIV}; font-weight: 600; font-variant-numeric: tabular-nums;">IV:${src_iv.data.value[idx].toFixed(2)}%</span> 
+                <span style="color:${colors.theta}; display:${showTheta}; font-weight: 600; font-variant-numeric: tabular-nums;">Θ:$${src_theta.data.value[idx].toFixed(2)}</span> 
+                <span style="color:${colors.delta}; display:${showDelta}; font-weight: 600; font-variant-numeric: tabular-nums;">Δ:${src_delta.data.value[idx].toFixed(4)}</span> 
+                <span style="color:${colors.gamma}; display:${showGamma}; font-weight: 600; font-variant-numeric: tabular-nums;">Γ:${src_gamma.data.value[idx].toFixed(6)}</span> 
+                <span style="color:${colors.vega}; display:${showVega}; font-weight: 600; font-variant-numeric: tabular-nums;">ν:$${src_vega.data.value[idx].toFixed(2)}</span>
+            </div>`;
         """
         return CustomJS(args=args, code=js_code)
 

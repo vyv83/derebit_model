@@ -439,20 +439,20 @@ def create_strike_chart(
     legend_div = Div(
         text=f'''
         <div style="{ChartTheme.PANEL_STYLE}">
-            <span style="color:{ChartTheme.CANDLE_UP}; font-weight: 600;">
+            <span style="color:{ChartTheme.CANDLE_UP}; font-weight: 700; font-size: 12px; font-variant-numeric: tabular-nums;">
                 O:{src_ohlc.data['close'][-1]:.2f}
                 H:{max(src_ohlc.data['high']):.2f}
                 L:{min(src_ohlc.data['low']):.2f}
                 C:{src_ohlc.data['close'][-1]:.2f}
             </span>
-            <span style="color:{ChartTheme.SPOT};">
+            <span style="color:{ChartTheme.SPOT}; font-weight: 700; font-size: 12px; font-variant-numeric: tabular-nums;">
                 Spot: ${src_spot.data['value'][-1]:.0f}
             </span>
-            <span style="color:{ChartTheme.GREEKS['iv']};">IV:--</span>
-            <span style="color:{ChartTheme.GREEKS['theta']};">Θ:--</span>
-            <span style="color:{ChartTheme.GREEKS['delta']};">Δ:--</span>
-            <span style="color:{ChartTheme.GREEKS['gamma']};">Γ:--</span>
-            <span style="color:{ChartTheme.GREEKS['vega']};">ν:--</span>
+            <span style="color:{ChartTheme.GREEKS['iv']}; font-weight: 600; font-variant-numeric: tabular-nums;">IV:--</span>
+            <span style="color:{ChartTheme.GREEKS['theta']}; font-weight: 600; font-variant-numeric: tabular-nums;">Θ:--</span>
+            <span style="color:{ChartTheme.GREEKS['delta']}; font-weight: 600; font-variant-numeric: tabular-nums;">Δ:--</span>
+            <span style="color:{ChartTheme.GREEKS['gamma']}; font-weight: 600; font-variant-numeric: tabular-nums;">Γ:--</span>
+            <span style="color:{ChartTheme.GREEKS['vega']}; font-weight: 600; font-variant-numeric: tabular-nums;">ν:--</span>
         </div>
         ''',
         sizing_mode='stretch_width',
