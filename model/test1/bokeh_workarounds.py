@@ -252,13 +252,17 @@ class StickyLabel:
         label_kwargs = dict(
             x=plot.x_range.end if hasattr(plot.x_range, 'end') else 0,
             y=y_value,
-            text=text,
-            text_font_size='8pt',
+            text=f" {text} ",
+            text_font_size='10px',
             text_color=color,
             text_font_style='normal',
             text_align='right',
-            x_offset=-5,
-            y_offset=2,
+            x_offset=-4,
+            y_offset=-6,
+            border_line_color=color,
+            border_line_alpha=0.5,
+            background_fill_color='#ffffff',
+            background_fill_alpha=0.9,
         )
         if y_range_name:
             label_kwargs['y_range_name'] = y_range_name
@@ -282,13 +286,17 @@ class StickyLabel:
         label_kwargs = dict(
             x=plot.x_range.start if hasattr(plot.x_range, 'start') else 0,
             y=y_value,
-            text=text,
-            text_font_size='8pt',
+            text=f" {text} ",
+            text_font_size='10px',
             text_color=color,
             text_font_style='normal',
             text_align='left',
-            x_offset=5,
-            y_offset=2,
+            x_offset=4,
+            y_offset=-6,
+            border_line_color=color,
+            border_line_alpha=0.5,
+            background_fill_color='#ffffff',
+            background_fill_alpha=0.9,
         )
         if y_range_name:
             label_kwargs['y_range_name'] = y_range_name

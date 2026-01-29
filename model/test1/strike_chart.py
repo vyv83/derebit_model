@@ -273,11 +273,13 @@ def create_main_chart(
     p.add_layout(spot_price_line)
     
     # ==================== STICKY LABELS ====================
-    option_label, _ = StickyLabel.create_right(
+    # Option Price (слева)
+    option_label, _ = StickyLabel.create_left(
         p, last_close, f'{last_close:.2f}', ChartTheme.TEXT_SECONDARY
     )
     
-    spot_label, _ = StickyLabel.create_left(
+    # Spot Price (справа)
+    spot_label, _ = StickyLabel.create_right(
         p, last_spot, f'{last_spot:.0f}', ChartTheme.TEXT_SECONDARY, y_range_name='spot'
     )
     
@@ -351,7 +353,7 @@ def create_greek_chart(
     
     # ==================== STICKY LABEL ====================
     price_label, _ = StickyLabel.create_right(
-        p, last_value, GreekConfig.format_value(key, last_value), ChartTheme.TEXT_SECONDARY
+        p, last_value, GreekConfig.format_value(key, last_value), color
     )
     
     return p, price_line, price_label
