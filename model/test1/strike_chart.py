@@ -396,8 +396,8 @@ def create_strike_chart(
     # ==================== X RANGE ====================
     x_min = min(src_ohlc.data['timestamp'])
     x_max = max(src_ohlc.data['timestamp'])
-    # Без padding, чтобы края данных совпадали с осями
-    initial_x_range = SmartBounds.create_x_range(x_min, x_max, padding=0)
+    # Добавляем нано padding (0.3%)
+    initial_x_range = SmartBounds.create_x_range(x_min, x_max, padding=0.003)
     
     # ==================== MAIN CHART ====================
     p_main, main_option_label, main_spot_label = create_main_chart(
