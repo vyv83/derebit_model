@@ -81,8 +81,7 @@ body,
 /* ========== PILL BUTTONS (Universal) ========== */
 /* Override Panel's bk-btn-group which joins buttons together */
 .pill-button .bk-btn-group,
-.currency-selector .bk-btn-group,
-.dte-selector .bk-btn-group {
+.currency-selector .bk-btn-group {
     gap: 4px !important;
     display: flex !important;
 }
@@ -107,23 +106,18 @@ body,
 
 /* Force pill shape on ALL states - override bk-btn-group joining */
 .currency-selector .bk-btn-group>.bk-btn:not(:first-child),
-.currency-selector .bk-btn-group>.bk-btn:not(:last-child),
-.dte-selector .bk-btn-group>.bk-btn:not(:first-child),
-.dte-selector .bk-btn-group>.bk-btn:not(:last-child) {
+.currency-selector .bk-btn-group>.bk-btn:not(:last-child) {
     border-radius: 20px !important;
     margin-left: 0 !important;
     border-left-width: 1px !important;
 }
 
-.currency-selector .bk-btn:hover,
-.dte-selector .bk-btn:hover {
+.currency-selector .bk-btn:hover {
     background: rgba(0, 123, 255, 0.1) !important;
 }
 
 .currency-selector .bk-btn.bk-active,
-.currency-selector .bk-btn-primary,
-.dte-selector .bk-btn.bk-active,
-.dte-selector .bk-btn-primary {
+.currency-selector .bk-btn-primary {
     background: var(--primary-color) !important;
     color: white !important;
     border-color: var(--primary-color) !important;
@@ -188,59 +182,10 @@ body,
 }
 
 /* ========== EXPIRATIONS SELECTOR - PILL STYLE ========== */
-.dte-selector-container {
-    overflow-x: auto;
-    white-space: nowrap;
-    padding: 4px 8px;
-    height: 34px !important;
-    display: flex;
-    align-items: center;
-    background: var(--card-bg);
-    border-radius: 6px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    border: 1px solid var(--border-color);
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-    margin-bottom: 6px;
-}
+/* ========== EXPIRATIONS SELECTOR - PILL STYLE ========== */
 
-.dte-selector-container::-webkit-scrollbar {
-    display: none;
-}
 
-.dte-selector .bk-btn-group {
-    gap: 4px !important;
-    display: flex !important;
-    flex-wrap: nowrap !important;
-}
 
-.dte-selector .bk-btn-group .bk-btn,
-.dte-selector .bk-btn {
-    font-size: 10px !important;
-    padding: 0 10px !important;
-    margin: 0 !important;
-    white-space: nowrap !important;
-    height: 22px !important;
-    min-height: 22px !important;
-    max-height: 22px !important;
-    border-radius: 20px !important;
-    border: 1px solid var(--primary-color) !important;
-    background: white !important;
-    color: var(--text-primary) !important;
-    transition: all 0.15s ease !important;
-}
-
-/* Force ALL buttons to have pill shape - override bk-btn-group joining */
-.dte-selector .bk-btn-group>.bk-btn {
-    border-radius: 20px !important;
-    border-left-width: 1px !important;
-}
-
-.dte-selector .bk-btn.bk-active,
-.dte-selector .bk-btn-primary {
-    background: var(--primary-color) !important;
-    color: white !important;
-}
 
 /* ========== CONTROL DOCK - FIXED BOTTOM ========== */
 .control-dock {

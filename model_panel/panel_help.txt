@@ -1,0 +1,289 @@
+# Стилизация кнопок в Panel: Руководство
+
+## Введение
+
+Panel рендерит компоненты в **Shadow DOM**, поэтому глобальный CSS не применяется. Для стилизации используются два параметра:
+
+| Параметр | Назначение | Что стилизует |
+|----------|------------|---------------|
+| `styles` | dict с CSS-свойствами | Внешний контейнер компонента |
+| `stylesheets` | список CSS-правил | Внутренние элементы компонента |
+
+---
+
+## 1. Базовые кнопки-переключатели
+
+Для создания группы toggle-кнопок (можно выбрать несколько или ни одной) используется `CheckButtonGroup`:
+
+```python
+import panel as pn
+pn.extension()
+
+toggle_buttons = pn.widgets.CheckButtonGroup(
+    options=['VOL', 'THETA', 'DELTA'],
+    value=[],                    # изначально ничего не выбрано
+    button_type='light',         # тип: 'default', 'primary', 'success', 'info', 'warning', 'danger', 'light'
+    button_style='outline'       # стиль: 'solid' или 'outline'
+)
+
+toggle_buttons
+```
+
+**Источник:** [CheckButtonGroup — Panel Documentation](https://panel.holoviz.org/reference/widgets/CheckButtonGroup.html)
+
+---
+
+## 2. Стилизация контейнера через `styles`
+
+Параметр `styles` принимает словарь CSS-свойств и применяет их к внешней обёртке компонента:
+
+```python
+container_styles = {
+    'background': '#f9f9f9',
+    'border': '1px solid #dee2e6',
+    'border-radius': '12px',
+    'padding': '15px 25px',
+    'box-shadow': 'rgba(50, 50, 93, 0.25) 0px 6px 12px -2px, rgba(0, 0, 0, 0.3) 0px 3px 7px -3px'
+}
+
+framed_buttons = pn.Row(
+    toggle_buttons,
+    styles=container_styles,
+    align='center'
+)
+```
+
+**Источник:** [Apply CSS — Panel Documentation](https://panel.holoviz.org/how_to/styling/apply_css.html)
+
+---
+
+## 3. Стилизация внутренних элементов через `stylesheets`
+
+Для изменения стиля самих кнопок (не контейнера) используется `stylesheets`. Кнопки Panel используют CSS-классы Bokeh:
+
+| CSS-класс | Элемент |
+|-----------|---------|
+| `.bk-btn` | Кнопка |
+| `.bk-btn.bk-active` | Нажатая (активная) кнопка |
+| `.bk-btn-group` | Группа кнопок |
+
+```python
+button_css = """
+.bk-btn {
+    border-radius: 20px;
+    padding: 8px 20px;
+    font-weight: 500;
+}
+
+.bk-btn.bk-active {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+    color: white;
+}
+"""
+
+toggle_buttons = pn.widgets.CheckButtonGroup(
+    options=['VOL', 'THETA', 'DELTA'],
+    value=['VOL'],
+    button_type='light',
+    button_style='outline',
+    stylesheets=[button_css]
+)
+```
+
+**Как найти CSS-классы:** Документация рекомендует использовать инструменты разработчика браузера (правый клик → "Inspect") для изучения DOM-структуры компонента.
+
+**Источник:** [Apply CSS — Panel Documentation](https://panel.holoviz.org/how_to/styling/apply_css.html)
+
+---
+
+## 4. Удаление пунктирной рамки при фокусе
+
+При клике на кнопку появляется пунктирная рамка (outline). Чтобы её убрать:
+
+```python
+button_css = """
+/* Убираем outline при фокусе */
+.bk-btn:focus {
+    outline: none;
+}
+
+/* Для Firefox */
+.bk-btn::-moz-focus-inner {
+    border: 0;
+}
+"""
+```
+
+---
+
+## 5. 3D-эффект с тенями
+
+Стиль теней из официального туториала Panel:
+
+```python
+button_css = """
+/* Выпуклая кнопка (не нажата) */
+.bk-btn:not(.bk-active) {
+    box-shadow: rgba(50, 50, 93, 0.25) 0px 6px 12px -2px, 
+                rgba(0, 0, 0, 0.3) 0px 3px 7px -3px;
+}
+
+/* Вдавленная кнопка (нажата) */
+.bk-btn.bk-active {
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Hover-эффект */
+.bk-btn:hover:not(.bk-active) {
+    transform: translateY(-1px);
+    box-shadow: rgba(50, 50, 93, 0.3) 0px 8px 16px -4px, 
+                rgba(0, 0, 0, 0.35) 0px 4px 8px -4px;
+}
+"""
+```
+
+**Источник:** [Build a Dashboard — Panel Documentation](https://panel.holoviz.org/tutorials/basic/build_dashboard.html)
+
+---
+
+## 6. Центрирование кнопок
+
+Используйте параметр `align` для выравнивания:
+
+```python
+pn.Row(
+    toggle_buttons,
+    align='center',  # 'start', 'center', 'end'
+    height=80
+)
+```
+
+Или кортеж для раздельного управления:
+
+```python
+align=('center', 'center')  # (horizontal, vertical)
+```
+
+**Источник:** [Align Components — Panel Documentation](https://panel.holoviz.org/how_to/layout/align.html)
+
+---
+
+## 7. Полный пример
+
+```python
+import panel as pn
+pn.extension()
+
+# CSS для кнопок
+button_css = """
+/* Убираем пунктирную рамку */
+.bk-btn:focus {
+    outline: none;
+}
+.bk-btn::-moz-focus-inner {
+    border: 0;
+}
+
+/* Базовый стиль */
+.bk-btn {
+    border-radius: 20px;
+    padding: 8px 20px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+
+/* 3D-тень для обычной кнопки */
+.bk-btn:not(.bk-active) {
+    box-shadow: rgba(50, 50, 93, 0.25) 0px 6px 12px -2px, 
+                rgba(0, 0, 0, 0.3) 0px 3px 7px -3px;
+}
+
+/* Нажатая кнопка */
+.bk-btn.bk-active {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+    color: white;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Hover */
+.bk-btn:hover:not(.bk-active) {
+    transform: translateY(-1px);
+}
+"""
+
+# Стили контейнера
+container_styles = {
+    'border': '1px solid #dee2e6',
+    'border-radius': '12px',
+    'padding': '15px 25px',
+    'background': '#f8f9fa',
+    'box-shadow': 'rgba(50, 50, 93, 0.25) 0px 6px 12px -2px, rgba(0, 0, 0, 0.3) 0px 3px 7px -3px'
+}
+
+# Кнопки
+toggle_buttons = pn.widgets.CheckButtonGroup(
+    options=['03 Jan (2d)', '04 Jan (3d)', '05 Jan (1d)'],
+    value=['03 Jan (2d)'],
+    button_type='light',
+    button_style='outline',
+    stylesheets=[button_css]
+)
+
+# Вывод значения
+output = pn.pane.Markdown('**Выбрано:** 03 Jan (2d)')
+
+def on_change(event):
+    selected = ', '.join(event.new) if event.new else 'ничего'
+    output.object = f'**Выбрано:** {selected}'
+
+toggle_buttons.param.watch(on_change, 'value')
+
+# Layout
+app = pn.Column(
+    pn.Row(
+        toggle_buttons,
+        styles=container_styles,
+        align='center'
+    ),
+    output
+)
+
+app.servable()
+```
+
+---
+
+## 8. Справочник параметров
+
+### CheckButtonGroup
+
+| Параметр | Значения | Описание |
+|----------|----------|----------|
+| `options` | list | Список опций |
+| `value` | list | Выбранные значения |
+| `button_type` | `'default'`, `'primary'`, `'success'`, `'info'`, `'warning'`, `'danger'`, `'light'` | Цветовая тема |
+| `button_style` | `'solid'`, `'outline'` | Заливка или контур |
+| `orientation` | `'horizontal'`, `'vertical'` | Ориентация |
+| `stylesheets` | list | CSS для внутренних элементов |
+
+### Layouts (Row, Column)
+
+| Параметр | Значения | Описание |
+|----------|----------|----------|
+| `styles` | dict | CSS для контейнера |
+| `align` | `'start'`, `'center'`, `'end'` | Выравнивание |
+| `height` | int | Высота в пикселях |
+| `sizing_mode` | `'stretch_width'`, `'stretch_both'`, etc. | Режим размера |
+
+---
+
+## 9. Ссылки на документацию
+
+- [CheckButtonGroup](https://panel.holoviz.org/reference/widgets/CheckButtonGroup.html)
+- [Apply CSS](https://panel.holoviz.org/how_to/styling/apply_css.html)
+- [Align Components](https://panel.holoviz.org/how_to/layout/align.html)
+- [Row Layout](https://panel.holoviz.org/reference/layouts/Row.html)
+- [Build a Dashboard (примеры стилей)](https://panel.holoviz.org/tutorials/basic/build_dashboard.html)
+- [Enhance the Style](https://panel.holoviz.org/tutorials/basic/style.html)

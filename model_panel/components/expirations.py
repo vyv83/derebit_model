@@ -16,13 +16,53 @@ class ExpirationsComponent(pn.viewable.Viewer):
         super().__init__(**params)
         self.state = state
         
+        button_css = """
+        /* Focus state - remove default outline */
+        .bk-btn:focus {
+            outline: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Default state - Convex 3D effect */
+        .bk-btn {
+            border-radius: 20px !important;
+            padding: 4px 12px !important;
+            font-size: 11px !important;
+            font-weight: 500 !important;
+            transition: all 0.2s ease;
+            margin: 0 2px !important;
+            border: 1px solid #e0e0e0 !important;
+            color: #495057 !important;
+            background-color: white !important;
+            box-shadow: rgba(50, 50, 93, 0.15) 0px 2px 4px -1px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px !important;
+        }
+
+        /* Hover state - Lift up */
+        .bk-btn:hover:not(.bk-active) {
+            transform: translateY(-1px);
+            box-shadow: rgba(50, 50, 93, 0.2) 0px 4px 8px -2px, rgba(0, 0, 0, 0.15) 0px 2px 4px -2px !important;
+            background-color: #f8f9fa !important;
+        }
+
+        /* Active state - Concave/Pressed effect */
+        .bk-btn.bk-active {
+            background-color: #007bff !important;
+            border-color: #007bff !important;
+            color: white !important;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2) !important;
+            transform: translateY(0);
+        }
+        """
+
         # Create CheckButtonGroup
         self.selector = pn.widgets.CheckButtonGroup(
             name='Expirations',
             options=[],
             value=[],
-            button_type='default',
-            css_classes=['dte-selector']
+            button_type='light',
+            button_style='outline',
+            stylesheets=[button_css],
+            align='center'
         )
         
         # Watch state for option changes
@@ -60,10 +100,20 @@ class ExpirationsComponent(pn.viewable.Viewer):
             self.state.selected_dtes = list(event.new)
     
     def __panel__(self):
+        # Frame container with scrolling and centering
         return pn.Row(
             self.selector,
-            css_classes=['dte-selector-container'],
+            styles={
+                'border': '1px solid #e0e0e0',
+                'border-radius': '8px',
+                'padding': '6px 12px',
+                'background': '#ffffff',
+                'box-shadow': '0 1px 3px rgba(0,0,0,0.05)',
+                'overflow-x': 'auto',
+                'min-width': '0' # Enable flex shrinking
+            },
             sizing_mode='stretch_width',
-            margin=0,
-            height=34  # Compact height
+            margin=(0, 0, 10, 0),
+            align='center',
+            height=50
         )
