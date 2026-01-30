@@ -46,22 +46,46 @@ class TimeDeckComponent(pn.viewable.Viewer):
         # Watch for timestamp changes to update slider bounds
         state.param.watch(self._update_slider_bounds, 'timestamps')
         
-        # Navigation buttons
+        # Navigation buttons with icons - NARROWER
+        nav_button_css = """
+        .bk-btn {
+            border: none !important;
+            background: transparent !important;
+            color: #888888 !important;
+            font-size: 16px !important;
+            padding: 0px !important; /* Removed padding for narrow look */
+            box-shadow: none !important;
+            border-radius: 4px !important;
+            transition: all 0.15s ease !important;
+            min-width: 0 !important; /* Allow narrow width */
+        }
+        .bk-btn:hover {
+            color: #444444 !important;
+            background: rgba(0, 0, 0, 0.05) !important;
+        }
+        .bk-btn:active {
+            color: #222222 !important;
+            background: rgba(0, 0, 0, 0.1) !important;
+        }
+        """
+
         self.btn_back = pn.widgets.Button(
-            name='◀',
+            icon='chevron-left',
+            icon_size='1.3em',
             button_type='light',
-            width=35,
+            width=20, # Much narrower
             height=35,
-            css_classes=['nav-button']
+            stylesheets=[nav_button_css]
         )
         self.btn_back.on_click(state.on_back_click)
         
         self.btn_play = pn.widgets.Button(
-            name='▶',
+            icon='chevron-right',
+            icon_size='1.3em',
             button_type='light', 
-            width=35,
+            width=20, # Much narrower
             height=35,
-            css_classes=['nav-button']
+            stylesheets=[nav_button_css]
         )
         self.btn_play.on_click(state.on_play_click)
     
@@ -92,7 +116,7 @@ class TimeDeckComponent(pn.viewable.Viewer):
             if dt.day == 1:  # Only first day of month
                 pct = (i * 100 / (total - 1)) if total > 1 else 0
                 marks.append(
-                    f'<span style="left:{pct:.1f}%">{dt.strftime("%b")}</span>'
+                    f'<span style="left:{pct:.1f}%">{dt.strftime("%m")}</span>'
                 )
         
         return f'<div class="slider-marks">{"".join(marks)}</div>'
@@ -107,41 +131,45 @@ class TimeDeckComponent(pn.viewable.Viewer):
         )
     
     def __panel__(self):
-        # Time label row - compact
-        time_label_row = pn.Row(
-            pn.pane.HTML('<span class="time-label">TIME SNAPSHOT SELECTOR</span>'),
+        # 1. Date Section - Fixed width, Left aligned
+        date_section = pn.Row(
             self.time_display,
-            margin=(0, 0, 3, 0)
+            width=80, # Fixed width to prevent collapsing
+            align='center',
+            margin=(5, 5, 0, 5), # Lowered MORE (was 2)
+            sizing_mode='fixed' 
         )
-        
-        # Slider with marks - stretch to fill
+
+        # 2. Slider Section - Takes all remaining space
         slider_section = pn.Column(
             self.slider,
             self._marks_overlay,
             sizing_mode='stretch_width',
-            margin=0
+            margin=(7, 5, 0, 5), # Reverted to 7 (was 12)
         )
         
-        # Navigation buttons - compact
+        # 3. Navigation Buttons - Fixed width, Right aligned, Tight
         nav_buttons = pn.Row(
             self.btn_back,
             self.btn_play,
-            css_classes=['nav-buttons'],
-            margin=(0, 0, 0, 15),
-            align='center'
+            width=50, # Narrow fixed width container
+            align='center',
+            margin=(0, 5, 0, 0),
+            sizing_mode='fixed',
+            styles={'gap': '0px'} # Force 0 gap
         )
         
-        # Main layout - flex grow for slider section
+        # Main Layout
         return pn.Row(
-            pn.Column(
-                time_label_row,
-                slider_section,
-                sizing_mode='stretch_width',
-                margin=0,
-                styles={'flex': '1 1 auto', 'min-width': '0'}  # Flex grow
-            ),
+            date_section,
+            slider_section,
             nav_buttons,
             sizing_mode='stretch_width',
             css_classes=['control-dock-inner'],
-            styles={'width': '100%'}
+            styles={
+                'width': '100%', 
+                'align-items': 'center', # Vertical centering
+                'justify-content': 'space-between' # Distribute elements
+            },
+            margin=(0, 0, 0, 0) # Reverted top margin to lower the frame height
         )

@@ -64,7 +64,7 @@ class AppState(param.Parameterized):
     kpi_spot = param.String(default='-', doc="Spot price display value")
     kpi_atm_iv = param.String(default='-', doc="ATM IV display value")
     kpi_hv = param.String(default='-', doc="HV 30D display value")
-    time_display = param.String(default='TIME SNAPSHOT: -', doc="Time display string")
+    time_display = param.String(default='-', doc="Time display string")
     
     def __init__(self, **params):
         super().__init__(**params)
@@ -141,7 +141,7 @@ class AppState(param.Parameterized):
             self.kpi_spot = '-'
             self.kpi_atm_iv = '-'
             self.kpi_hv = '-'
-            self.time_display = 'TIME SNAPSHOT: -'
+            self.time_display = '-'
             return
         
         # Bounds check
@@ -156,7 +156,7 @@ class AppState(param.Parameterized):
                 self.kpi_spot = 'N/A'
                 self.kpi_atm_iv = 'N/A'
                 self.kpi_hv = 'N/A'
-                self.time_display = f"TIME SNAPSHOT: {pd.to_datetime(target_ts).strftime('%d %b %Y')}"
+                self.time_display = f"{pd.to_datetime(target_ts).strftime('%d.%m.%Y')}"
                 return
             
             self.market_state = state
@@ -169,7 +169,7 @@ class AppState(param.Parameterized):
             self.kpi_spot = f"${spot:,.2f}"
             self.kpi_atm_iv = f"{atm_iv:.1f}%"
             self.kpi_hv = f"{hv:.1f}%"
-            self.time_display = f"TIME SNAPSHOT: {pd.to_datetime(target_ts).strftime('%d %b %Y')}"
+            self.time_display = f"{pd.to_datetime(target_ts).strftime('%d.%m.%Y')}"
             
             logger.debug(f"AppState: Market state updated for {target_ts}")
             

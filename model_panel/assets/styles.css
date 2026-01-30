@@ -42,13 +42,21 @@ body,
 }
 
 /* ========== HEADER ROW - VERY COMPACT ========== */
+/* ========== HEADER ROW - VERY COMPACT ========== */
 .header-row {
     display: flex;
     align-items: flex-end;
-    gap: 12px;
-    padding: 4px 0 8px 0;
+    gap: 8px;
+    /* Reduced gap */
+    padding: 2px 0 4px 0;
+    /* Minimal padding */
     border-bottom: 1px solid var(--border-color);
-    margin-bottom: 6px;
+    margin-bottom: 2px;
+    /* Minimal margin */
+    overflow-x: auto;
+    /* Scroll horizontally if too small */
+    min-width: fit-content;
+    /* Ensure row takes necessary width */
 }
 
 /* Title Block */
@@ -65,6 +73,7 @@ body,
     font-size: 9px !important;
     color: var(--text-secondary);
     margin: 0 !important;
+    line-height: 1.1;
 }
 
 /* ========== SELECTOR LABELS - TINY ========== */
@@ -73,9 +82,13 @@ body,
     font-weight: 600;
     color: var(--text-secondary);
     display: block;
-    margin-bottom: 2px;
+    margin-bottom: -2px !important;
+    /* Force closer to control */
     text-transform: uppercase;
     letter-spacing: 0.03em;
+    line-height: 1;
+    /* Standard line height */
+    padding-bottom: 0px !important;
 }
 
 /* ========== PILL BUTTONS (Universal) ========== */
@@ -144,6 +157,10 @@ body,
     height: 40px;
     margin-left: auto;
     padding: 0 !important;
+    flex-shrink: 0;
+    /* Prevent shrinking */
+    width: max-content;
+    /* Fit content exactly */
 }
 
 .kpi-item {
@@ -151,12 +168,14 @@ body,
     display: flex;
     flex-direction: column;
     justify-content: center;
-    min-width: 70px;
+    min-width: 80px;
+    /* Increased slightly */
     height: 100%;
 }
 
 .kpi-item:first-child {
-    min-width: 90px;
+    min-width: 100px;
+    /* Increased slightly */
 }
 
 .kpi-item:not(:last-child) {
@@ -171,6 +190,8 @@ body,
     text-transform: uppercase;
     margin: 0;
     line-height: 1.2;
+    white-space: nowrap !important;
+    /* Prevent wrapping */
 }
 
 .kpi-value {
@@ -179,6 +200,8 @@ body,
     color: var(--text-primary);
     line-height: 1.2;
     margin-top: 1px;
+    white-space: nowrap !important;
+    /* Prevent wrapping */
 }
 
 /* ========== EXPIRATIONS SELECTOR - PILL STYLE ========== */
@@ -198,7 +221,7 @@ body,
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     border-top: 1px solid #E0E0E0;
-    padding: 8px 24px !important;
+    padding: 4px 24px !important;
     z-index: 1000 !important;
 }
 
@@ -312,7 +335,7 @@ body,
 
 /* ========== CHART CONTAINER - MAXIMIZE ========== */
 .chart-container {
-    height: calc(100vh - 220px) !important;
+    height: calc(100vh - 150px) !important;
     min-height: 350px !important;
 }
 
@@ -479,4 +502,65 @@ body,
 .bk-panel-models-layout-Row>div,
 .bk-panel-models-layout-Column>div {
     margin: 0 !important;
+}
+
+/* ========== TIME DECK ========== */
+.time-display {
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    color: var(--text-secondary) !important;
+    /* Made Gray */
+    text-align: center;
+    white-space: nowrap;
+    margin-top: -2px !important;
+    /* Pulled up closer */
+    line-height: 1 !important;
+}
+
+.time-label {
+    font-size: 9px !important;
+    font-weight: 700 !important;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.slider-marks {
+    position: relative;
+    height: 10px;
+    /* Reduced height */
+    width: 100%;
+    margin-top: 1px;
+    pointer-events: none;
+}
+
+.slider-marks span {
+    position: absolute;
+    font-size: 9px;
+    color: var(--text-secondary);
+    transform: translateX(-50%);
+    font-family: 'Inter', monospace;
+    /* Monospace for alignment */
+}
+
+/* Nav buttons override */
+.nav-buttons .bk-btn {
+    border: none !important;
+    background: transparent !important;
+    color: var(--text-secondary) !important;
+    /* Made Gray */
+    font-size: 16px !important;
+    padding: 0 2px !important;
+    /* Reduced padding */
+    box-shadow: none !important;
+    height: 20px !important;
+    /* Reduced height */
+    line-height: 20px !important;
+    min-height: 20px !important;
+}
+
+.nav-buttons .bk-btn:hover {
+    color: var(--text-primary) !important;
+    /* Darker on hover */
+    background: rgba(0, 0, 0, 0.03) !important;
 }

@@ -27,7 +27,7 @@ class HeaderComponent(pn.viewable.Viewer):
         
         # Period selector  
         self.period_selector = pn.widgets.Select(
-            name='Period',
+            name='',  # Hide default label to avoid duplication and save space
             options=['2021', '2022', '2023', '2024', '2025'],
             value=state.period,
             width=100,
@@ -90,38 +90,52 @@ class HeaderComponent(pn.viewable.Viewer):
         )
     
     def __panel__(self):
-        # Title section - compact
         title_section = pn.Column(
             pn.pane.HTML('<h1 class="app-title">NEURAL OPTIONS ANALYTICS</h1>'),
             pn.pane.HTML('<p class="app-subtitle">Hybrid NN+BS Greeks Engine</p>'),
-            margin=0,
-            styles={'line-height': '1.2'}
+            margin=(0, 15, 8, 0), # Increased bottom margin to lift title up
+            styles={'line-height': '1', 'gap': '0px'},
+            min_width=220
         )
         
-        # Currency selector with label
+        # Currency selector with min_width
         currency_section = pn.Column(
             pn.pane.HTML('<label class="selector-label">CURRENCY</label>'),
             self.currency_selector,
-            margin=(0, 10, 0, 0)
+            margin=(0, 5, 0, 0),
+            styles={'gap': '0px'},
+            min_width=120
         )
         
-        # Period selector with label
+        # Period selector with min_width
         period_section = pn.Column(
             pn.pane.HTML('<label class="selector-label">PERIOD</label>'),
             self.period_selector,
-            margin=(0, 10, 0, 0)
+            margin=(0, 5, 0, 0),
+            styles={'gap': '0px'},
+            min_width=100
         )
         
+        # KPI bar
+        kpi_bar = self._build_kpi_bar()
+        kpi_bar.min_width = 280 # Ensure KPI bar doesn't squash
+        kpi_bar.margin = (0, 0, 5, 0) # Raise KPI bar to align bottom with Select widget
+
         # Spacer to push KPIs to right
-        spacer = pn.Spacer(sizing_mode='stretch_width')
+        spacer = pn.Spacer(styles={'flex': '1 1 auto'})
         
-        return pn.Row(
+        # Use FlexBox as requested by user for robust single-line layout
+        return pn.FlexBox(
             title_section,
             currency_section,
             period_section,
             spacer,
-            self._build_kpi_bar(),
+            kpi_bar,
+            flex_wrap='nowrap', # Prevent wrapping
+            align_items='end', # Align bottom like original row
+            gap='8px',
             css_classes=['header-row'],
             sizing_mode='stretch_width',
-            margin=(5, 0)  # Compact vertical margin
+            margin=(2, 0), # Minimal vertical margin
+            styles={'overflow-x': 'auto'} # Ensure horizontal scroll
         )

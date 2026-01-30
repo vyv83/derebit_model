@@ -287,3 +287,370 @@ app.servable()
 - [Row Layout](https://panel.holoviz.org/reference/layouts/Row.html)
 - [Build a Dashboard (примеры стилей)](https://panel.holoviz.org/tutorials/basic/build_dashboard.html)
 - [Enhance the Style](https://panel.holoviz.org/tutorials/basic/style.html)
+
+Нашёл! `FlexBox` имеет параметр `flex_wrap='nowrap'` — элементы не переносятся. Вот решение:
+
+---
+
+## Решение: Одна строка без переноса с минимальными размерами
+
+Используй `FlexBox` с `flex_wrap='nowrap'` — элементы остаются в одной строке и не наползают благодаря `min_width`.
+
+### Код
+
+```python
+import panel as pn
+pn.extension()
+
+# === CSS для кнопок ===
+button_css = """
+.bk-btn:focus { outline: none; }
+.bk-btn::-moz-focus-inner { border: 0; }
+.bk-btn {
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-weight: 500;
+}
+.bk-btn:not(.bk-active) {
+    box-shadow: rgba(50, 50, 93, 0.25) 0px 6px 12px -2px, rgba(0, 0, 0, 0.3) 0px 3px 7px -3px;
+}
+.bk-btn.bk-active {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+    color: white;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+}
+"""
+
+# === Компоненты с min_width ===
+title = pn.pane.Markdown(
+    "**NEURAL OPTIONS ANALYTICS**<br><small>Hybrid NN+BS Greeks Engine</small>",
+    min_width=200
+)
+
+currency_buttons = pn.widgets.CheckButtonGroup(
+    options=['BTC', 'ETH'],
+    value=['BTC'],
+    button_type='light',
+    button_style='outline',
+    stylesheets=[button_css],
+    min_width=120
+)
+
+period_select = pn.widgets.Select(
+    options=['2024', '2025', '2026'],
+    value='2024',
+    width=100,
+    min_width=80
+)
+
+price_indicator = pn.indicators.Number(
+    name='PRICE', value=44179.55, format='${value:,.2f}',
+    min_width=100
+)
+
+iv_indicator = pn.indicators.Number(
+    name='IV ATM', value=66.8, format='{value}%',
+    min_width=80
+)
+
+# === FlexBox: одна строка, без переноса ===
+header = pn.FlexBox(
+    title,
+    pn.pane.Markdown("CURRENCY", min_width=70),
+    currency_buttons,
+    pn.pane.Markdown("PERIOD", min_width=50),
+    period_select,
+    pn.Spacer(styles={'flex': '1 1 auto'}),  # занимает свободное место
+    price_indicator,
+    iv_indicator,
+    
+    flex_wrap='nowrap',        # НЕ переносить элементы
+    align_items='center',      # центрировать по вертикали
+    gap='15px',                # отступы между элементами
+    sizing_mode='stretch_width',
+    min_height=60,
+    styles={
+        'padding': '10px 20px',
+        'background': '#f8f9fa',
+        'border-bottom': '1px solid #dee2e6',
+        'overflow-x': 'auto'   # горизонтальный скролл если не помещается
+    }
+)
+
+header.servable()
+```
+
+---
+
+### Ключевые параметры
+
+| Параметр | Значение | Что делает |
+|----------|----------|------------|
+| `flex_wrap` | `'nowrap'` | Элементы в одной строке, не переносятся |
+| `align_items` | `'center'` | Центрирование по вертикали |
+| `min_width` | число | Минимальная ширина элемента (не сжимается меньше) |
+| `overflow-x` | `'auto'` | Горизонтальный скролл если не помещается |
+| `gap` | `'15px'` | Отступы между элементами |
+
+**Источник:** [FlexBox API — Panel Documentation](https://panel.holoviz.org/api/panel.layout.flex.html)
+
+---
+
+### Альтернатива: GridSpec (фиксированная сетка)
+
+Если нужна жёсткая сетка с фиксированными колонками:
+
+```python
+import panel as pn
+pn.extension()
+
+gspec = pn.GridSpec(sizing_mode='stretch_width', height=60, ncols=12)
+
+# Распределяем по колонкам (всего 12)
+gspec[0, 0:3] = title              # колонки 0-2
+gspec[0, 3:4] = currency_buttons   # колонка 3
+gspec[0, 4:5] = period_select      # колонка 4
+gspec[0, 8:10] = price_indicator   # колонки 8-9
+gspec[0, 10:12] = iv_indicator     # колонки 10-11
+
+gspec.servable()
+```
+
+**Источник:** [GridSpec — Panel Documentation](https://panel.holoviz.org/reference/layouts/GridSpec.html)
+
+---
+
+### Что выбрать
+
+| Вариант | Когда использовать |
+|---------|-------------------|
+| `FlexBox` + `flex_wrap='nowrap'` + `min_width` | Элементы сжимаются до минимума, потом скролл |
+| `GridSpec` | Жёсткая сетка с фиксированными пропорциями колонок |
+
+
+Отлично! Нашёл `ButtonIcon` — это специальный виджет для иконок-кнопок. Вот решение на основе документации:
+
+---
+
+## Решение: Красивые серые стрелочки
+
+### Вариант 1: Использовать `ButtonIcon` (рекомендуется)
+
+Согласно [документации ButtonIcon](https://panel.holoviz.org/reference/widgets/ButtonIcon.html), это виджет специально для кнопок-иконок. Иконки загружаются с [tabler-icons.io](https://tabler-icons.io/).
+
+```python
+import panel as pn
+pn.extension()
+
+# CSS для серого цвета и стилизации
+icon_css = """
+:host {
+    color: #888888;
+}
+:host(:hover) {
+    color: #333333;
+}
+"""
+
+# Кнопка "назад"
+btn_back = pn.widgets.ButtonIcon(
+    icon='chevron-left',      # иконка с tabler-icons.io
+    size='1.5em',
+    description='Назад',
+    stylesheets=[icon_css]
+)
+btn_back.on_click(lambda e: print('Back clicked'))
+
+# Кнопка "вперёд"  
+btn_forward = pn.widgets.ButtonIcon(
+    icon='chevron-right',
+    size='1.5em', 
+    description='Вперёд',
+    stylesheets=[icon_css]
+)
+btn_forward.on_click(lambda e: print('Forward clicked'))
+
+# Кнопка "play"
+btn_play = pn.widgets.ButtonIcon(
+    icon='player-play',
+    active_icon='player-pause',  # меняется при клике
+    size='1.5em',
+    description='Play',
+    stylesheets=[icon_css]
+)
+
+pn.Row(btn_back, btn_play, btn_forward)
+```
+
+---
+
+### Вариант 2: Обычный `Button` с параметром `icon`
+
+Согласно [документации Button](https://panel.holoviz.org/reference/widgets/Button.html), можно использовать параметр `icon`:
+
+```python
+import panel as pn
+pn.extension()
+
+nav_button_css = """
+.bk-btn {
+    border: none !important;
+    background: transparent !important;
+    color: #888888 !important;
+    padding: 4px 8px !important;
+    box-shadow: none !important;
+    min-width: 30px !important;
+}
+.bk-btn:hover {
+    color: #333333 !important;
+    background: rgba(0, 0, 0, 0.05) !important;
+    border-radius: 4px !important;
+}
+.bk-btn:active {
+    color: #000000 !important;
+    background: rgba(0, 0, 0, 0.1) !important;
+}
+"""
+
+btn_back = pn.widgets.Button(
+    icon='chevron-left',
+    icon_size='1.2em',
+    button_type='light',
+    width=35,
+    height=35,
+    stylesheets=[nav_button_css]
+)
+
+btn_forward = pn.widgets.Button(
+    icon='chevron-right',
+    icon_size='1.2em',
+    button_type='light',
+    width=35,
+    height=35,
+    stylesheets=[nav_button_css]
+)
+
+pn.Row(btn_back, btn_forward)
+```
+
+---
+
+### Вариант 3: Красивые 3D-стрелки с тенью
+
+```python
+import panel as pn
+pn.extension()
+
+nav_button_3d_css = """
+.bk-btn {
+    border: 1px solid #e0e0e0 !important;
+    background: linear-gradient(180deg, #ffffff 0%, #f5f5f5 100%) !important;
+    color: #666666 !important;
+    padding: 6px 10px !important;
+    border-radius: 6px !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+    transition: all 0.15s ease !important;
+}
+.bk-btn:hover {
+    color: #333333 !important;
+    background: linear-gradient(180deg, #ffffff 0%, #eeeeee 100%) !important;
+    box-shadow: 0 3px 6px rgba(0,0,0,0.15) !important;
+    transform: translateY(-1px);
+}
+.bk-btn:active {
+    background: linear-gradient(180deg, #f0f0f0 0%, #e8e8e8 100%) !important;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.1) !important;
+    transform: translateY(0);
+}
+"""
+
+btn_back = pn.widgets.Button(
+    icon='chevron-left',
+    icon_size='1.2em',
+    button_type='light',
+    width=40,
+    height=40,
+    stylesheets=[nav_button_3d_css]
+)
+
+btn_forward = pn.widgets.Button(
+    icon='chevron-right', 
+    icon_size='1.2em',
+    button_type='light',
+    width=40,
+    height=40,
+    stylesheets=[nav_button_3d_css]
+)
+
+pn.Row(btn_back, btn_forward, align='center')
+```
+
+---
+
+### Полезные иконки с tabler-icons.io
+
+| Иконка | Название |
+|--------|----------|
+| ◀ | `chevron-left` или `arrow-left` |
+| ▶ | `chevron-right` или `arrow-right` |
+| ⏮ | `player-skip-back` |
+| ⏭ | `player-skip-forward` |
+| ▶ (play) | `player-play` |
+| ⏸ (pause) | `player-pause` |
+| ⏹ (stop) | `player-stop` |
+
+---
+
+### Твой код с исправлениями
+
+```python
+# components/time_deck.py
+
+nav_button_css = """
+.bk-btn {
+    border: none !important;
+    background: transparent !important;
+    color: #888888 !important;
+    font-size: 16px !important;
+    padding: 4px 8px !important;
+    box-shadow: none !important;
+    border-radius: 4px !important;
+    transition: all 0.15s ease !important;
+}
+.bk-btn:hover {
+    color: #444444 !important;
+    background: rgba(0, 0, 0, 0.05) !important;
+}
+.bk-btn:active {
+    color: #222222 !important;
+    background: rgba(0, 0, 0, 0.1) !important;
+}
+"""
+
+# Используй icon вместо Unicode символов
+self.btn_back = pn.widgets.Button(
+    icon='chevron-left',
+    icon_size='1.2em',
+    button_type='light',
+    width=35,
+    height=35,
+    stylesheets=[nav_button_css]
+)
+self.btn_back.on_click(state.on_back_click)
+
+self.btn_play = pn.widgets.Button(
+    icon='player-play',
+    icon_size='1.2em',
+    button_type='light',
+    width=35,
+    height=35,
+    stylesheets=[nav_button_css]
+)
+self.btn_play.on_click(state.on_play_click)
+```
+
+**Источники:**
+- [ButtonIcon — Panel Documentation](https://panel.holoviz.org/reference/widgets/ButtonIcon.html)
+- [Button (параметр icon) — Panel Documentation](https://panel.holoviz.org/reference/widgets/Button.html)
+- [Tabler Icons](https://tabler-icons.io/) — библиотека иконок
