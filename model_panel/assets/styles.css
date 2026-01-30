@@ -299,6 +299,24 @@ body,
     top: -5px !important;
 }
 
+/* ========== SLIDER MARKS ========== */
+.slider-marks {
+    position: relative;
+    height: 12px;
+    width: 100%;
+    margin-top: 2px;
+    font-size: 9px;
+    color: var(--text-secondary);
+    pointer-events: none;
+    /* Let clicks pass through */
+}
+
+.slider-marks span {
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
 /* ========== NAVIGATION BUTTONS - SMALL ROUND ========== */
 .nav-buttons {
     display: flex;
@@ -409,14 +427,16 @@ body,
 }
 
 .tabulator .tabulator-header .tabulator-col {
-    height: 24px !important;
-    padding: 2px 4px !important;
+    height: 32px !important;
+    padding: 0 !important;
 }
 
 .tabulator .tabulator-header .tabulator-col-content {
+    height: 100% !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
+    padding: 0 4px !important;
 }
 
 .tabulator .tabulator-row {
@@ -426,8 +446,8 @@ body,
 }
 
 .tabulator .tabulator-cell {
-    padding: 2px 4px !important;
-    line-height: 24px !important;
+    padding: 4px !important;
+    /* Removed custom display/height/line-height that broke data rendering */
 }
 
 /* Sort arrows - hide to reduce clutter */

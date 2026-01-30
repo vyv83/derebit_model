@@ -144,18 +144,19 @@ class BoardView(pn.viewable.Viewer):
         table = pn.widgets.Tabulator(
             display_df,
             layout='fit_columns',
-            height=400,  # Compact height
+            sizing_mode='stretch_both',
+            height_policy='max',
+            min_height=600,
             show_index=False,
             titles=col_titles,
             formatters=formatters,
             text_align={'strike_price': 'center'},
             header_align='center',
             selectable='row',
-            sizing_mode='stretch_width',
             theme='bootstrap5',  # Compact theme
             configuration={
                 'rowHeight': 28,  # Compact rows
-                'headerHeight': 24,  # Compact header
+                'headerHeight': 32,  # Sufficient height for centering
                 'renderVerticalBuffer': 300,  # Reduce flickering
             },
             stylesheets=[f'''
@@ -165,6 +166,7 @@ class BoardView(pn.viewable.Viewer):
                 :host .tabulator-header {{
                     font-size: 10px !important;
                     font-weight: 600 !important;
+                    height: 32px !important;
                 }}
                 :host .tabulator-row {{
                     min-height: 28px !important;
