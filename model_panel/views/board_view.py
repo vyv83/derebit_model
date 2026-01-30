@@ -150,6 +150,7 @@ class BoardView(pn.viewable.Viewer):
             show_index=False,
             titles=col_titles,
             formatters=formatters,
+            editors={c: None for c in display_df.columns}, # Explicitly disable all editors
             text_align={'strike_price': 'center'},
             header_align='center',
             selectable='row',

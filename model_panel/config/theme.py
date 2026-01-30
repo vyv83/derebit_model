@@ -59,7 +59,7 @@ def apply_chart_theme(fig, title_text):
         title=dict(
             text=title_text,
             font=dict(size=CHART_THEME["title_size"], color=CUSTOM_CSS["text_primary"], weight=800),
-            x=0.5, xanchor='center'
+            x=0.01, xanchor='left'
         ),
         plot_bgcolor='white',
         paper_bgcolor='white',
