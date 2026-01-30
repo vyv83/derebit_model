@@ -1,0 +1,517 @@
+/* ==========================================================================
+   NEURAL OPTIONS ANALYTICS - Panel Application Styles
+   UPDATED: 2026-01-30 14:55 - CRITICAL FIX: Compact UI matching Dash original
+   ========================================================================== */
+
+/* ========== FONTS ========== */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* ========== CSS VARIABLES ========== */
+:root {
+    --background: #F5F7F9;
+    --card-bg: #FFFFFF;
+    --text-primary: #2C3E50;
+    --text-secondary: #7F8C8D;
+    --accent-call: #76D7C4;
+    --accent-put: #FF8787;
+    --accent-iv: #9B59B6;
+    --accent-theta: #E67E22;
+    --border-color: #E0E6ED;
+    --primary-color: #007bff;
+}
+
+/* ========== GLOBAL RESET ========== */
+* {
+    box-sizing: border-box;
+}
+
+body,
+.bk-root {
+    background-color: var(--background) !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    margin: 0;
+    padding: 0;
+}
+
+/* ========== MAIN CONTAINER - FULL WIDTH ========== */
+.main-container {
+    width: 100% !important;
+    max-width: none !important;
+    padding: 8px 16px 100px 16px !important;
+    margin: 0 !important;
+}
+
+/* ========== HEADER ROW - VERY COMPACT ========== */
+.header-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    padding: 4px 0 8px 0;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 6px;
+}
+
+/* Title Block */
+.app-title {
+    font-size: 14px !important;
+    font-weight: 800;
+    color: var(--text-primary);
+    white-space: nowrap;
+    margin: 0 !important;
+    line-height: 1;
+}
+
+.app-subtitle {
+    font-size: 9px !important;
+    color: var(--text-secondary);
+    margin: 0 !important;
+}
+
+/* ========== SELECTOR LABELS - TINY ========== */
+.selector-label {
+    font-size: 9px !important;
+    font-weight: 600;
+    color: var(--text-secondary);
+    display: block;
+    margin-bottom: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+/* ========== PILL BUTTONS (Universal) ========== */
+/* Override Panel's bk-btn-group which joins buttons together */
+.pill-button .bk-btn-group,
+.currency-selector .bk-btn-group,
+.dte-selector .bk-btn-group {
+    gap: 4px !important;
+    display: flex !important;
+}
+
+.pill-button .bk-btn-group .bk-btn,
+.currency-selector .bk-btn-group .bk-btn,
+.currency-selector .bk-btn {
+    border-radius: 20px !important;
+    padding: 0 12px !important;
+    font-size: 10px !important;
+    height: 22px !important;
+    min-height: 22px !important;
+    max-height: 22px !important;
+    line-height: 20px !important;
+    border: 1px solid var(--primary-color) !important;
+    background: white !important;
+    color: var(--text-primary) !important;
+    font-weight: 500 !important;
+    transition: all 0.15s ease !important;
+    margin: 0 !important;
+}
+
+/* Force pill shape on ALL states - override bk-btn-group joining */
+.currency-selector .bk-btn-group>.bk-btn:not(:first-child),
+.currency-selector .bk-btn-group>.bk-btn:not(:last-child),
+.dte-selector .bk-btn-group>.bk-btn:not(:first-child),
+.dte-selector .bk-btn-group>.bk-btn:not(:last-child) {
+    border-radius: 20px !important;
+    margin-left: 0 !important;
+    border-left-width: 1px !important;
+}
+
+.currency-selector .bk-btn:hover,
+.dte-selector .bk-btn:hover {
+    background: rgba(0, 123, 255, 0.1) !important;
+}
+
+.currency-selector .bk-btn.bk-active,
+.currency-selector .bk-btn-primary,
+.dte-selector .bk-btn.bk-active,
+.dte-selector .bk-btn-primary {
+    background: var(--primary-color) !important;
+    color: white !important;
+    border-color: var(--primary-color) !important;
+}
+
+/* ========== PERIOD SELECTOR ========== */
+.period-selector select,
+.period-selector .bk-input {
+    border-radius: 50rem !important;
+    width: 75px !important;
+    height: 22px !important;
+    font-size: 10px !important;
+    padding: 0 10px !important;
+}
+
+/* ========== KPI BAR - ULTRA COMPACT ========== */
+.kpi-bar {
+    display: flex;
+    align-items: center;
+    background: var(--card-bg);
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    border: 1px solid var(--border-color);
+    height: 40px;
+    margin-left: auto;
+    padding: 0 !important;
+}
+
+.kpi-item {
+    padding: 0 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 70px;
+    height: 100%;
+}
+
+.kpi-item:first-child {
+    min-width: 90px;
+}
+
+.kpi-item:not(:last-child) {
+    border-right: 1px solid var(--border-color);
+}
+
+.kpi-label {
+    font-size: 9px !important;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin: 0;
+    line-height: 1.2;
+}
+
+.kpi-value {
+    font-size: 13px !important;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.2;
+    margin-top: 1px;
+}
+
+/* ========== EXPIRATIONS SELECTOR - PILL STYLE ========== */
+.dte-selector-container {
+    overflow-x: auto;
+    white-space: nowrap;
+    padding: 4px 8px;
+    height: 34px !important;
+    display: flex;
+    align-items: center;
+    background: var(--card-bg);
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    border: 1px solid var(--border-color);
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    margin-bottom: 6px;
+}
+
+.dte-selector-container::-webkit-scrollbar {
+    display: none;
+}
+
+.dte-selector .bk-btn-group {
+    gap: 4px !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+}
+
+.dte-selector .bk-btn-group .bk-btn,
+.dte-selector .bk-btn {
+    font-size: 10px !important;
+    padding: 0 10px !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+    height: 22px !important;
+    min-height: 22px !important;
+    max-height: 22px !important;
+    border-radius: 20px !important;
+    border: 1px solid var(--primary-color) !important;
+    background: white !important;
+    color: var(--text-primary) !important;
+    transition: all 0.15s ease !important;
+}
+
+/* Force ALL buttons to have pill shape - override bk-btn-group joining */
+.dte-selector .bk-btn-group>.bk-btn {
+    border-radius: 20px !important;
+    border-left-width: 1px !important;
+}
+
+.dte-selector .bk-btn.bk-active,
+.dte-selector .bk-btn-primary {
+    background: var(--primary-color) !important;
+    color: white !important;
+}
+
+/* ========== CONTROL DOCK - FIXED BOTTOM ========== */
+.control-dock {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    background-color: rgba(255, 255, 255, 0.98) !important;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-top: 1px solid #E0E0E0;
+    padding: 8px 24px !important;
+    z-index: 1000 !important;
+}
+
+.control-dock-inner {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    width: 100%;
+}
+
+/* Time slider section - most space */
+.control-dock-inner>.bk-Column:first-child {
+    flex: 1 1 auto !important;
+    min-width: 0;
+}
+
+/* Date/Time label */
+.time-label {
+    font-size: 9px !important;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.time-display {
+    font-size: 10px !important;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-left: 8px;
+}
+
+/* ========== SLIDER - COMPACT ========== */
+.time-slider {
+    width: 100% !important;
+}
+
+.time-slider .noUi-target {
+    height: 6px !important;
+}
+
+.time-slider .noUi-handle {
+    width: 14px !important;
+    height: 14px !important;
+    top: -5px !important;
+}
+
+/* ========== NAVIGATION BUTTONS - SMALL ROUND ========== */
+.nav-buttons {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+}
+
+.nav-button .bk-btn {
+    border-radius: 50% !important;
+    width: 26px !important;
+    height: 26px !important;
+    min-width: 26px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 10px !important;
+}
+
+/* ========== MAIN TABS - COMPACT ========== */
+.main-tabs .bk-header {
+    margin-bottom: 4px !important;
+}
+
+.main-tabs .bk-tab {
+    font-size: 12px !important;
+    padding: 5px 10px !important;
+    font-weight: 500 !important;
+}
+
+/* ========== BOARD SUBTABS - SMALLER ========== */
+.board-subtabs .bk-tab {
+    font-size: 11px !important;
+    padding: 4px 8px !important;
+    font-weight: 500 !important;
+}
+
+/* ========== CARD ========== */
+.card {
+    background-color: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+    border: none;
+    padding: 6px 10px;
+    margin-bottom: 4px;
+}
+
+/* ========== CHART CONTAINER - MAXIMIZE ========== */
+.chart-container {
+    height: calc(100vh - 220px) !important;
+    min-height: 350px !important;
+}
+
+.bk-pane.Plotly {
+    height: 100% !important;
+}
+
+/* ========== CHART TOGGLE BUTTONS - COMPACT STYLE ========== */
+.chart-controls-container {
+    margin-bottom: 4px;
+}
+
+.chart-controls {
+    display: flex;
+    gap: 5px;
+}
+
+/* Toggle button - matches Dash original exactly */
+.toggle-btn .bk-btn {
+    padding: 1px 10px !important;
+    height: 24px !important;
+    min-height: 24px !important;
+    border-radius: 4px !important;
+    font-size: 10px !important;
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
+    border: 1px solid #ced4da !important;
+    color: var(--text-secondary) !important;
+    white-space: nowrap !important;
+    min-width: auto !important;
+    width: auto !important;
+}
+
+/* Active state for IV toggle */
+.toggle-btn-iv.active .bk-btn {
+    border-color: var(--accent-iv) !important;
+    color: var(--accent-iv) !important;
+}
+
+/* Active state for Theta toggle */
+.toggle-btn-theta.active .bk-btn {
+    border-color: var(--accent-theta) !important;
+    color: var(--accent-theta) !important;
+}
+
+/* ========== TABULATOR (Options Board) - ULTRA COMPACT ========== */
+.tabulator {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 11px !important;
+    border: none !important;
+}
+
+.tabulator .tabulator-header {
+    font-size: 10px !important;
+    background-color: #FAFBFC !important;
+    border-bottom: 1px solid var(--border-color) !important;
+}
+
+.tabulator .tabulator-header .tabulator-col {
+    height: 24px !important;
+    padding: 2px 4px !important;
+}
+
+.tabulator .tabulator-header .tabulator-col-content {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.tabulator .tabulator-row {
+    min-height: 28px !important;
+    max-height: 28px !important;
+    height: 28px !important;
+}
+
+.tabulator .tabulator-cell {
+    padding: 2px 4px !important;
+    line-height: 24px !important;
+}
+
+/* Sort arrows - hide to reduce clutter */
+.tabulator .tabulator-header .tabulator-col .tabulator-arrow {
+    display: none !important;
+}
+
+/* ATM Row highlighting */
+.tabulator .tabulator-row.atm-row,
+.tabulator .tabulator-row[data-atm="true"] {
+    background-color: #FEF9E7 !important;
+}
+
+/* Strike column - BOLD and CENTERED */
+.tabulator .tabulator-cell[tabulator-field="strike_price"] {
+    font-weight: 800 !important;
+    text-align: center !important;
+    background-color: #F8F9F9 !important;
+    border-left: 2px solid #D5D8DC !important;
+    border-right: 2px solid #D5D8DC !important;
+    font-size: 12px !important;
+}
+
+/* Call Delta - green */
+.tabulator .tabulator-cell[tabulator-field="delta_c"] {
+    color: var(--accent-call) !important;
+    font-weight: 600 !important;
+}
+
+/* Put Delta - red */
+.tabulator .tabulator-cell[tabulator-field="delta_p"] {
+    color: var(--accent-put) !important;
+    font-weight: 600 !important;
+}
+
+/* Price columns bold */
+.tabulator .tabulator-cell[tabulator-field="price_c"],
+.tabulator .tabulator-cell[tabulator-field="price_p"] {
+    font-weight: 600 !important;
+}
+
+/* ========== PLOTLY MODEBAR ========== */
+.js-plotly-plot .modebar {
+    background-color: transparent !important;
+}
+
+.js-plotly-plot .modebar-btn path {
+    fill: rgba(0, 0, 0, 0.2) !important;
+}
+
+.js-plotly-plot .modebar-btn:hover path {
+    fill: var(--accent-iv) !important;
+}
+
+/* ========== ERROR/PLACEHOLDER MESSAGES ========== */
+.error-message,
+.placeholder-message {
+    padding: 20px;
+    text-align: center;
+    background-color: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+
+.error-message h5,
+.placeholder-message h5 {
+    color: var(--text-primary);
+    margin-bottom: 10px;
+    font-size: 13px;
+}
+
+.error-message p,
+.placeholder-message p {
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+/* ========== FIX PANEL DEFAULT SPACING ========== */
+.bk-Row,
+.bk-Column {
+    gap: 0 !important;
+}
+
+.bk-panel-models-layout-Row>div,
+.bk-panel-models-layout-Column>div {
+    margin: 0 !important;
+}
