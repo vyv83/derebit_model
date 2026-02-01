@@ -50,7 +50,6 @@ body,
     /* Reduced gap */
     padding: 2px 0 4px 0;
     /* Minimal padding */
-    border-bottom: 1px solid var(--border-color);
     margin-bottom: 2px;
     /* Minimal margin */
     overflow-x: auto;

@@ -26,9 +26,14 @@ class ExpirationsComponent(pn.viewable.Viewer):
         /* Default state - Convex 3D effect */
         .bk-btn {
             border-radius: 20px !important;
-            padding: 4px 12px !important;
+            padding: 0 10px !important;
+            height: 24px !important;
             font-size: 11px !important;
             font-weight: 500 !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            line-height: 1 !important;
             transition: all 0.2s ease;
             margin: 0 2px !important;
             border: 1px solid #e0e0e0 !important;
@@ -106,14 +111,14 @@ class ExpirationsComponent(pn.viewable.Viewer):
             styles={
                 'border': '1px solid #e0e0e0',
                 'border-radius': '8px',
-                'padding': '6px 12px',
+                'padding': '4px 6px',
                 'background': '#ffffff',
                 'box-shadow': '0 1px 3px rgba(0,0,0,0.05)',
                 'overflow-x': 'auto',
                 'min-width': '0' # Enable flex shrinking
             },
             sizing_mode='stretch_width',
-            margin=(0, 0, 10, 0),
+            margin=(0, 0, 8, 0),
             align='center',
-            height=50
+            height=36
         )
