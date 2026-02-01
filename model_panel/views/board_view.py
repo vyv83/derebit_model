@@ -277,7 +277,8 @@ class BoardView(pn.viewable.Viewer):
             self._set_empty("Please select at least one expiration from the list above")
             return
             
-        current_date = pd.to_datetime(market_state['target_ts'])
+        # NORMALIZE to midnight to allow DTE=0 (same day expiration)
+        current_date = pd.to_datetime(market_state['target_ts']).normalize()
         spot = market_state.get('underlying_price', 0)
         
         sorted_dtes = sorted(selected_dtes)

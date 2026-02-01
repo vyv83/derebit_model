@@ -250,7 +250,7 @@ class AppState(param.Parameterized):
             return
         
         try:
-            current_date = pd.to_datetime(self.market_state['target_ts'])
+            current_date = pd.to_datetime(self.market_state['target_ts']).normalize()
             spot = self.market_state.get('underlying_price', 0)
             vol = self.market_state.get('Real_IV_ATM', self.market_state.get('HV_30d', 0.80))
             
@@ -260,7 +260,7 @@ class AppState(param.Parameterized):
             
             for exp, cnt in all_exps:
                 dte = (exp - current_date).days
-                if dte <= 0:
+                if dte < 0:
                     continue
                 
                 # Determine Anchor (Birth) Parameters - matches original Dash logic
